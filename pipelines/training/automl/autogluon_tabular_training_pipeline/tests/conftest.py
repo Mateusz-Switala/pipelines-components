@@ -713,3 +713,46 @@ def compiled_pipeline_path():
 def pipeline_run_timeout():
     """Timeout in seconds for waiting on a pipeline run (override via env)."""
     return int(os.environ.get("RHOAI_PIPELINE_RUN_TIMEOUT", "3600"))
+
+
+# ---------------------------------------------------------------------------
+# Functional test hooks (pytest-xdist report merging)
+# ---------------------------------------------------------------------------
+
+
+def pytest_sessionfinish(session, exitstatus):  # noqa: ARG001
+    """Merge per-scenario report parts into the final JSON report.
+
+    With xdist this runs on each worker AND on the controller. We only merge
+    on the controller (or in a non-xdist single-process run).
+    """
+    is_xdist_worker = hasattr(session.config, "workerinput")
+    if is_xdist_worker:
+        return
+
+    report_parts_dir = _tests_dir / ".report_parts"
+    if not report_parts_dir.exists():
+        return
+
+    report: dict = {}
+    for part_file in sorted(report_parts_dir.glob("*.json")):
+        try:
+            data = json.loads(part_file.read_text(encoding="utf-8"))
+            report[part_file.stem] = data
+        except Exception:
+            pass
+
+    if report:
+        report_path = Path(
+            os.environ.get(
+                "AUTOML_FUNCTIONAL_TEST_REPORT",
+                str(_tests_dir / "functional_test_report.json"),
+            )
+        )
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(report_path, "w", encoding="utf-8") as f:
+            json.dump(report, f, indent=2, default=str)
+
+    import shutil
+
+    shutil.rmtree(report_parts_dir, ignore_errors=True)

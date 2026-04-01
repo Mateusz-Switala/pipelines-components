@@ -1,0 +1,38 @@
+[
+  {
+    "id": "TC-A-1_regression_housing",
+    "dataset_path": "data/House Price Prediction Dataset.csv",
+    "label_column": "Price",
+    "task_type": "regression",
+    "top_n": 1,
+    "train_data_file_key": "functional-test/housing_prices.csv",
+    "tags": [
+      "regression",
+      "smoke"
+    ]
+  },
+  {
+    "id": "TC-A-2_binary_churn",
+    "dataset_path": "data/ChurnModelling.csv",
+    "label_column": "Exited",
+    "task_type": "binary",
+    "top_n": 5,
+    "train_data_file_key": "functional-test/churn/nested/path/data.csv",
+    "tags": [
+      "classification",
+      "binary"
+    ]
+  },
+  {
+    "id": "TC-A-3_multiclass_covtype",
+    "dataset_path": "data/covtype.csv",
+    "label_column": "Cover_Type",
+    "task_type": "multiclass",
+    "top_n": 3,
+    "train_data_file_key": "functional-test/covtype.csv",
+    "tags": [
+      "classification",
+      "multiclass"
+    ]
+  }
+]
