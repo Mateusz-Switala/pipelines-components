@@ -1,0 +1,44 @@
+[
+  {
+    "id": "TC-B-1_timeseries_retail_sales",
+    "dataset_path": "data/retail_sales_dataset.csv",
+    "target": "Total Amount",
+    "id_column": "Product Category",
+    "timestamp_column": "Date",
+    "known_covariates_names": [],
+    "prediction_length": 1,
+    "top_n": 3,
+    "train_data_file_key": "functional-test/timeseries/retail_sales.csv",
+    "tags": ["timeseries", "retail"],
+    "add_dummy_item_id": false,
+    "add_dummy_timestamp": false
+  },
+  {
+    "id": "TC-B-2_timeseries_traffic",
+    "dataset_path": "data/traffic_dataset.csv",
+    "target": "vehicle_count",
+    "id_column": "item_id",
+    "timestamp_column": "timestamp",
+    "known_covariates_names": ["average_speed", "lane_occupancy"],
+    "prediction_length": 14,
+    "top_n": 1,
+    "train_data_file_key": "functional-test/timeseries/traffic.csv",
+    "tags": ["timeseries", "traffic"],
+    "add_dummy_item_id": true,
+    "add_dummy_timestamp": true
+  },
+  {
+    "id": "TC-B-3_timeseries_electricity",
+    "dataset_path": "data/Electricity Load Forecasting.csv",
+    "target": "nat_demand",
+    "id_column": "item_id",
+    "timestamp_column": "datetime",
+    "known_covariates_names": [],
+    "prediction_length": 7,
+    "top_n": 5,
+    "train_data_file_key": "functional-test/timeseries/electricity.csv",
+    "tags": ["timeseries", "electricity"],
+    "add_dummy_item_id": true,
+    "add_dummy_timestamp": false
+  }
+]

@@ -40,6 +40,7 @@ test_automl = [
     "boto3",
     "kubernetes",
     "python-dotenv",
+    "pytest-xdist",
 ]
 # Local development (extends test with additional tools)
 dev = ["kfp-components[lint]", "kfp-components[test]"]
@@ -174,6 +175,7 @@ python_classes = ["Test*"]
 python_functions = ["test_*"]
 markers = [
     "integration: marks test as integration/functional/e2e (requires RHOAI cluster and .env config).",
+    "functional: end-to-end functional tests on real RHOAI cluster with real datasets (TC-A matrix).",
 ]
 # Don't search these directories
 norecursedirs = [
