@@ -1057,17 +1057,23 @@ deploymentSpec:
           \            msg = str(current).upper()\n            if \"CERTIFICATE_VERIFY_FAILED\"\
           \ in msg or \"SSL\" in msg:\n                return True\n            current\
           \ = current.__cause__ or current.__context__\n        return False\n\n \
-          \   def _create_openai_client(api_key: str, base_url: str) -> OpenAI:\n\
-          \        \"\"\"Create OpenAI client, falling back to SSL-unverified if self-signed\
-          \ cert detected.\"\"\"\n        client = OpenAI(api_key=api_key, base_url=base_url)\n\
-          \        try:\n            client.models.list()\n        except (ssl.SSLCertVerificationError,\
-          \ httpx.ConnectError, OAIAPIConnectionError) as exc:\n            if _is_ssl_error(exc):\n\
-          \                _ssl_logger.warning(\n                    \"SSL verification\
-          \ failed for %s \u2014 retrying with verify=False. \",\n               \
-          \     base_url,\n                )\n                client = OpenAI(\n \
-          \                   api_key=api_key,\n                    base_url=base_url,\n\
-          \                    http_client=httpx.Client(verify=False),\n         \
-          \       )\n            else:\n                raise\n        return client\n\
+          \   # Mutable containers so the nested _create_openai_client can update\
+          \ the flags\n    # without requiring `nonlocal` or returning the flag.\n\
+          \    _chat_ssl_verify = [True]\n    _embedding_ssl_verify = [True]\n\n \
+          \   def _create_openai_client(api_key: str, base_url: str, _ssl_verify:\
+          \ list) -> OpenAI:\n        \"\"\"Create OpenAI client, falling back to\
+          \ SSL-unverified if self-signed cert detected.\"\"\"\n        client = OpenAI(api_key=api_key,\
+          \ base_url=base_url)\n        try:\n            client.models.list()\n \
+          \       except (ssl.SSLCertVerificationError, httpx.ConnectError, OAIAPIConnectionError)\
+          \ as exc:\n            if _is_ssl_error(exc):\n                _ssl_logger.warning(\n\
+          \                    \"SSL verification failed for %s \u2014 retrying with\
+          \ verify=False. \",\n                    base_url,\n                )\n\
+          \                client = OpenAI(\n                    api_key=api_key,\n\
+          \                    base_url=base_url,\n                    http_client=httpx.Client(verify=False),\n\
+          \                )\n                _ssl_verify[0] = False\n           \
+          \ else:\n                raise\n        return client\n\n    # Mutable container\
+          \ so the nested _create_llama_stack_client can update the flag\n    # without\
+          \ requiring `nonlocal` or returning the flag.\n    _ls_ssl_verify = [True]\n\
           \n    def _create_llama_stack_client(**kwargs) -> LlamaStackClient:\n  \
           \      \"\"\"Create LlamaStackClient, falling back to SSL-unverified if\
           \ self-signed cert detected.\"\"\"\n        client = LlamaStackClient(**kwargs)\n\
@@ -1076,23 +1082,23 @@ deploymentSpec:
           \                _ssl_logger.warning(\"SSL verification failed for LlamaStackClient\
           \ \u2014 retrying with verify=False. \")\n                client = LlamaStackClient(\n\
           \                    **kwargs,\n                    http_client=httpx.Client(verify=False),\n\
-          \                )\n            else:\n                raise\n        return\
-          \ client\n\n    if not isinstance(test_data_key, str) or not test_data_key.strip()\
-          \ or not test_data_key.lower().endswith(\".json\"):\n        raise ValueError(\"\
-          test_data_path must point to a JSON file\")\n\n    if optimization_settings\
-          \ is not None:\n        if not isinstance(optimization_settings, dict):\n\
-          \            raise TypeError(\"optimization_settings must be a dictionary.\"\
-          )\n        max_rag_patterns = optimization_settings.get(\"max_number_of_rag_patterns\"\
-          , DEFAULT_MAX_NUMBER_OF_RAG_PATTERNS)\n        if isinstance(max_rag_patterns,\
-          \ str):\n            try:\n                max_rag_patterns = int(max_rag_patterns.strip())\n\
-          \            except ValueError as exc:\n                raise ValueError(\n\
-          \                    \"optimization_settings.max_number_of_rag_patterns\
-          \ must be a valid integer \"\n                    f\"(e.g. from the pipeline\
-          \ UI); got {max_rag_patterns!r}.\"\n                ) from exc\n       \
-          \ if not isinstance(max_rag_patterns, int):\n            raise TypeError(\"\
-          optimization_settings.max_number_of_rag_patterns must be an integer.\")\n\
-          \n        _ssl_logger.info(\"max_number_of_rag_patterns %s\", max_rag_patterns)\n\
-          \        if not (\n            MAX_NUMBER_OF_RAG_PATTERNS_ALLOWED_RANGE[0]\n\
+          \                )\n                _ls_ssl_verify[0] = False\n        \
+          \    else:\n                raise\n        return client\n\n    if not isinstance(test_data_key,\
+          \ str) or not test_data_key.strip() or not test_data_key.lower().endswith(\"\
+          .json\"):\n        raise ValueError(\"test_data_path must point to a JSON\
+          \ file\")\n\n    if optimization_settings is not None:\n        if not isinstance(optimization_settings,\
+          \ dict):\n            raise TypeError(\"optimization_settings must be a\
+          \ dictionary.\")\n        max_rag_patterns = optimization_settings.get(\"\
+          max_number_of_rag_patterns\", DEFAULT_MAX_NUMBER_OF_RAG_PATTERNS)\n    \
+          \    if isinstance(max_rag_patterns, str):\n            try:\n         \
+          \       max_rag_patterns = int(max_rag_patterns.strip())\n            except\
+          \ ValueError as exc:\n                raise ValueError(\n              \
+          \      \"optimization_settings.max_number_of_rag_patterns must be a valid\
+          \ integer \"\n                    f\"(e.g. from the pipeline UI); got {max_rag_patterns!r}.\"\
+          \n                ) from exc\n        if not isinstance(max_rag_patterns,\
+          \ int):\n            raise TypeError(\"optimization_settings.max_number_of_rag_patterns\
+          \ must be an integer.\")\n\n        _ssl_logger.info(\"max_number_of_rag_patterns\
+          \ %s\", max_rag_patterns)\n        if not (\n            MAX_NUMBER_OF_RAG_PATTERNS_ALLOWED_RANGE[0]\n\
           \            <= max_rag_patterns\n            <= MAX_NUMBER_OF_RAG_PATTERNS_ALLOWED_RANGE[1]\n\
           \        ):\n            raise ValueError(\n                f\"optimization_settings.max_number_of_rag_patterns\
           \ must be in a range\"\n                f\"{MAX_NUMBER_OF_RAG_PATTERNS_ALLOWED_RANGE[0]}\
@@ -1208,61 +1214,77 @@ deploymentSpec:
           \    def create_placeholder_mapping(\n        output_data: dict[str, Any],\n\
           \        test_data_key: str = \"\",\n        input_data_key: str = \"\"\
           ,\n        chat_model_url: str = \"\",\n        embedding_model_url: str\
-          \ = \"\",\n    ) -> dict[str, Any]:\n        \"\"\"Create a mapping from\
-          \ placeholder names to their values from output.json.\n\n        This function\
-          \ extracts values from the output.json structure and creates\n        a\
-          \ flat dictionary suitable for use with NotebookCell.format_source().\n\n\
-          \        Expected output.json structure:\n        {\n            \"config\"\
-          : {\n                \"pattern_name\": \"...\",\n                \"autorag_version\"\
-          : \"...\",\n                \"llama_stack\": {\n                    \"foundation_model\"\
-          : {...},\n                    \"embedding_model\": {...},\n            \
-          \        \"vector_store\": {...},\n                    \"retriever\": {...},\n\
-          \                    \"chunker\": {...}\n                },\n          \
-          \      \"data\": {...}\n            }\n        }\n\n        Args:\n    \
-          \        output_data: The parsed pattern.json data\n            test_data_key:\
+          \ = \"\",\n        ls_ssl_verify: bool = True,\n        chat_ssl_verify:\
+          \ bool = True,\n        embedding_ssl_verify: bool = True,\n    ) -> dict[str,\
+          \ Any]:\n        \"\"\"Create a mapping from placeholder names to their\
+          \ values from output.json.\n\n        This function extracts values from\
+          \ the output.json structure and creates\n        a flat dictionary suitable\
+          \ for use with NotebookCell.format_source().\n\n        Expected output.json\
+          \ structure:\n        {\n            \"config\": {\n                \"pattern_name\"\
+          : \"...\",\n                \"autorag_version\": \"...\",\n            \
+          \    \"llama_stack\": {\n                    \"foundation_model\": {...},\n\
+          \                    \"embedding_model\": {...},\n                    \"\
+          vector_store\": {...},\n                    \"retriever\": {...},\n    \
+          \                \"chunker\": {...}\n                },\n              \
+          \  \"data\": {...}\n            }\n        }\n\n        Args:\n        \
+          \    output_data: The parsed pattern.json data\n            test_data_key:\
           \ Test data key.\n            input_data_key: Input data key.\n        \
           \    chat_model_url: Chat model url.\n            embedding_model_url: Embedding\
-          \ model url.\n\n        Returns:\n            Dictionary mapping placeholder\
-          \ names to their values.\n        \"\"\"\n        mapping = {}\n\n     \
-          \   mapping[\"PATTERN_NAME\"] = output_data.get(\"name\", \"\")\n      \
-          \  settings = output_data.get(\"settings\", {})\n        fm = settings.get(\"\
-          generation\", {})\n        mapping[\"FM_MODEL_ID\"] = fm.get(\"model_id\"\
-          , \"\")\n        mapping[\"SYSTEM_MESSAGE\"] = fm.get(\"system_message_text\"\
-          , \"\")\n        mapping[\"USER_MESSAGE\"] = fm.get(\"user_message_text\"\
-          , \"\")\n        mapping[\"CONTEXT_TEXT\"] = fm.get(\"context_template_text\"\
-          , \"\")\n\n        em = settings.get(\"embedding\", {})\n        mapping[\"\
-          EMBEDDING_MODEL_ID\"] = em.get(\"model_id\", \"\")\n        mapping[\"EMBEDDING_PARAMS\"\
-          ] = em.get(\"embedding_params\", {\"embedding_dimension\": 768})\n     \
-          \   mapping[\"DISTANCE_METRIC\"] = em.get(\"distance_metric\", \"\")\n\n\
-          \        vs = settings.get(\"vector_store\", {})\n        mapping[\"PROVIDER_ID\"\
-          ] = vs.get(\"datasource_type\", \"\")\n        mapping[\"COLLECTION_NAME\"\
-          ] = vs.get(\"collection_name\", \"\")\n\n        ret = settings.get(\"retrieval\"\
-          , {})\n        mapping[\"RETRIEVAL_METHOD\"] = ret.get(\"method\", \"\"\
-          )\n        mapping[\"NUMBER_OF_CHUNKS\"] = ret.get(\"number_of_chunks\"\
-          , 5)\n\n        ch = settings.get(\"chunking\", {})\n        mapping[\"\
-          CHUNKING_METHOD\"] = ch.get(\"method\", \"\")\n        mapping[\"CHUNK_SIZE\"\
-          ] = ch.get(\"chunk_size\", 512)\n        mapping[\"CHUNK_OVERLAP\"] = ch.get(\"\
-          chunk_overlap\", 50)\n\n        mapping[\"TEST_DATA_KEY\"] = test_data_key\n\
-          \        mapping[\"INPUT_DATA_KEY\"] = input_data_key\n\n        mapping[\"\
-          CHAT_MODEL_URL\"] = chat_model_url\n        mapping[\"EMBEDDING_MODEL_URL\"\
-          ] = embedding_model_url\n\n        return mapping\n\n    def generate_notebook_from_templates(\n\
+          \ model url.\n            ls_ssl_verify: Whether LlamaStack SSL verification\
+          \ succeeded.\n            chat_ssl_verify: Whether chat model (OpenAI) SSL\
+          \ verification succeeded.\n            embedding_ssl_verify: Whether embedding\
+          \ model (OpenAI) SSL verification succeeded.\n\n        Returns:\n     \
+          \       Dictionary mapping placeholder names to their values.\n        \"\
+          \"\"\n        mapping = {}\n\n        mapping[\"PATTERN_NAME\"] = output_data.get(\"\
+          name\", \"\")\n        settings = output_data.get(\"settings\", {})\n  \
+          \      fm = settings.get(\"generation\", {})\n        mapping[\"FM_MODEL_ID\"\
+          ] = fm.get(\"model_id\", \"\")\n        mapping[\"SYSTEM_MESSAGE\"] = fm.get(\"\
+          system_message_text\", \"\")\n        mapping[\"USER_MESSAGE\"] = fm.get(\"\
+          user_message_text\", \"\")\n        mapping[\"CONTEXT_TEXT\"] = fm.get(\"\
+          context_template_text\", \"\")\n\n        em = settings.get(\"embedding\"\
+          , {})\n        mapping[\"EMBEDDING_MODEL_ID\"] = em.get(\"model_id\", \"\
+          \")\n        mapping[\"EMBEDDING_PARAMS\"] = em.get(\"embedding_params\"\
+          , {\"embedding_dimension\": 768})\n        mapping[\"DISTANCE_METRIC\"]\
+          \ = em.get(\"distance_metric\", \"\")\n\n        vs = settings.get(\"vector_store\"\
+          , {})\n        mapping[\"PROVIDER_ID\"] = vs.get(\"datasource_type\", \"\
+          \")\n        mapping[\"COLLECTION_NAME\"] = vs.get(\"collection_name\",\
+          \ \"\")\n\n        ret = settings.get(\"retrieval\", {})\n        mapping[\"\
+          RETRIEVAL_METHOD\"] = ret.get(\"method\", \"\")\n        mapping[\"NUMBER_OF_CHUNKS\"\
+          ] = ret.get(\"number_of_chunks\", 5)\n\n        ch = settings.get(\"chunking\"\
+          , {})\n        mapping[\"CHUNKING_METHOD\"] = ch.get(\"method\", \"\")\n\
+          \        mapping[\"CHUNK_SIZE\"] = ch.get(\"chunk_size\", 512)\n       \
+          \ mapping[\"CHUNK_OVERLAP\"] = ch.get(\"chunk_overlap\", 50)\n\n       \
+          \ mapping[\"TEST_DATA_KEY\"] = test_data_key\n        mapping[\"INPUT_DATA_KEY\"\
+          ] = input_data_key\n\n        mapping[\"CHAT_MODEL_URL\"] = chat_model_url\n\
+          \        mapping[\"EMBEDDING_MODEL_URL\"] = embedding_model_url\n      \
+          \  mapping[\"LS_SSL_VERIFY\"] = ls_ssl_verify\n        mapping[\"CHAT_SSL_VERIFY\"\
+          ] = chat_ssl_verify\n        mapping[\"EMBEDDING_SSL_VERIFY\"] = embedding_ssl_verify\n\
+          \n        return mapping\n\n    def generate_notebook_from_templates(\n\
           \        notebook_template: Literal[\n            \"ls_inference\",\n  \
           \          \"ls_indexing\",\n            \"chroma\",\n        ],\n     \
           \   output_data: dict[str, Any],\n        output_notebook_path: Path,\n\
           \        test_data_key: str = \"\",\n        input_data_key: str = \"\"\
-          ,\n    ) -> None:\n        \"\"\"Generate a filled notebook from templates\
-          \ and output.json.\n\n        Args:\n            notebook_template: One\
-          \ of the allowed template names.\n            output_data: The parsed output.json\
-          \ data.\n            output_notebook_path: Path where to save the generated\
-          \ notebook.\n            test_data_key: Path to test data file within bucket\
-          \ used as input to AI4RAG.\n            input_data_key: Path to documents\
-          \ dir within bucket used as input to AI4RAG.\n\n        Returns:\n     \
-          \       None. The notebook is written to output_notebook_path.\n       \
-          \ \"\"\"\n        placeholder_mapping = create_placeholder_mapping(\n  \
-          \          output_data,\n            test_data_key=test_data_key,\n    \
-          \        input_data_key=input_data_key,\n            chat_model_url=chat_model_url,\n\
-          \            embedding_model_url=embedding_model_url,\n        )\n     \
-          \   notebook = Notebook.load(notebook_name=f\"{notebook_template}_template.ipynb\"\
+          ,\n        ls_ssl_verify: bool = True,\n        chat_ssl_verify: bool =\
+          \ True,\n        embedding_ssl_verify: bool = True,\n    ) -> None:\n  \
+          \      \"\"\"Generate a filled notebook from templates and output.json.\n\
+          \n        Args:\n            notebook_template: One of the allowed template\
+          \ names.\n            output_data: The parsed output.json data.\n      \
+          \      output_notebook_path: Path where to save the generated notebook.\n\
+          \            test_data_key: Path to test data file within bucket used as\
+          \ input to AI4RAG.\n            input_data_key: Path to documents dir within\
+          \ bucket used as input to AI4RAG.\n            ls_ssl_verify: Whether LlamaStack\
+          \ SSL verification succeeded; False causes the\n                generated\
+          \ notebook to skip the SSL probe and connect with verify=False directly.\n\
+          \            chat_ssl_verify: Whether chat model (OpenAI) SSL verification\
+          \ succeeded.\n            embedding_ssl_verify: Whether embedding model\
+          \ (OpenAI) SSL verification succeeded.\n\n        Returns:\n           \
+          \ None. The notebook is written to output_notebook_path.\n        \"\"\"\
+          \n        placeholder_mapping = create_placeholder_mapping(\n          \
+          \  output_data,\n            test_data_key=test_data_key,\n            input_data_key=input_data_key,\n\
+          \            chat_model_url=chat_model_url,\n            embedding_model_url=embedding_model_url,\n\
+          \            ls_ssl_verify=ls_ssl_verify,\n            chat_ssl_verify=chat_ssl_verify,\n\
+          \            embedding_ssl_verify=embedding_ssl_verify,\n        )\n   \
+          \     notebook = Notebook.load(notebook_name=f\"{notebook_template}_template.ipynb\"\
           )\n        filled_cells = []\n        for cell in notebook.cells:\n    \
           \        filled_cell = cell.format_source(placeholder_mapping)\n       \
           \     filled_cells.append(filled_cell)\n\n        notebook = Notebook(cells=filled_cells)\n\
@@ -1307,16 +1329,18 @@ deploymentSpec:
           \    \"All of (`chat_model_url`, `chat_model_token`, `embedding_model_url`,\
           \ `embedding_model_token`) \"\n                \"have to be defined when\
           \ running AutoRAG experiment using an in-memory vector store.\"\n      \
-          \      )\n        client = Client(\n            generation_model=_create_openai_client(api_key=chat_model_token,\
-          \ base_url=chat_model_url),\n            embedding_model=_create_openai_client(api_key=embedding_model_token,\
-          \ base_url=embedding_model_url),\n        )\n        in_memory_vector_store_scenario\
-          \ = True\n\n    def construct_model_instance(loader, node: yml.MappingNode)\
-          \ -> BaseEmbeddingModel | BaseFoundationModel:\n        \"\"\"Instructs\
-          \ yml.Loader on how to construct \"!Model\" tag.\"\"\"\n        mapping\
-          \ = loader.construct_mapping(node, deep=True)\n\n        match mapping:\n\
-          \            case {\"type_\": \"embedding\", **id_to_params}:\n        \
-          \        model_id, params = id_to_params.popitem()\n                if in_memory_vector_store_scenario:\n\
-          \                    return OpenAIEmbeddingModel(client=client.embedding_model,\
+          \      )\n        client = Client(\n            generation_model=_create_openai_client(\n\
+          \                api_key=chat_model_token, base_url=chat_model_url, _ssl_verify=_chat_ssl_verify\n\
+          \            ),\n            embedding_model=_create_openai_client(\n  \
+          \              api_key=embedding_model_token, base_url=embedding_model_url,\
+          \ _ssl_verify=_embedding_ssl_verify\n            ),\n        )\n       \
+          \ in_memory_vector_store_scenario = True\n\n    def construct_model_instance(loader,\
+          \ node: yml.MappingNode) -> BaseEmbeddingModel | BaseFoundationModel:\n\
+          \        \"\"\"Instructs yml.Loader on how to construct \"!Model\" tag.\"\
+          \"\"\n        mapping = loader.construct_mapping(node, deep=True)\n\n  \
+          \      match mapping:\n            case {\"type_\": \"embedding\", **id_to_params}:\n\
+          \                model_id, params = id_to_params.popitem()\n           \
+          \     if in_memory_vector_store_scenario:\n                    return OpenAIEmbeddingModel(client=client.embedding_model,\
           \ model_id=model_id, params=params)\n                else:\n           \
           \         return LSEmbeddingModel(client=client.llama_stack, model_id=model_id,\
           \ params=params)\n\n            case {\"type_\": \"generation\", **id_to_params}:\n\
@@ -1473,21 +1497,23 @@ deploymentSpec:
           \ == \"chroma\":\n            generate_notebook_from_templates(\n      \
           \          \"chroma\",\n                pattern_data,\n                Path(patt_dir,\
           \ \"indexing_and_inference.ipynb\"),\n                input_data_key=input_data_key,\n\
-          \                test_data_key=test_data_key,\n            )\n        else:\n\
-          \            generate_notebook_from_templates(\n                \"ls_indexing\"\
-          ,\n                pattern_data,\n                Path(patt_dir, \"indexing.ipynb\"\
-          ),\n                input_data_key=input_data_key,\n            )\n\n  \
-          \          generate_notebook_from_templates(\n                \"ls_inference\"\
+          \                test_data_key=test_data_key,\n                chat_ssl_verify=_chat_ssl_verify[0],\n\
+          \                embedding_ssl_verify=_embedding_ssl_verify[0],\n      \
+          \      )\n        else:\n            generate_notebook_from_templates(\n\
+          \                \"ls_indexing\",\n                pattern_data,\n     \
+          \           Path(patt_dir, \"indexing.ipynb\"),\n                input_data_key=input_data_key,\n\
+          \                ls_ssl_verify=_ls_ssl_verify[0],\n            )\n\n   \
+          \         generate_notebook_from_templates(\n                \"ls_inference\"\
           ,\n                pattern_data,\n                Path(patt_dir, \"inference.ipynb\"\
-          ),\n                test_data_key=test_data_key,\n            )\n\n    \
-          \    # Flat schema: scores = per-metric aggregates (mean, ci_low, ci_high);\
-          \ final_score\n        pattern_data[\"scores\"] = (getattr(eval, \"scores\"\
-          , None) or {}).get(\"scores\") or {}\n        pattern_data[\"final_score\"\
-          ] = getattr(eval, \"final_score\", None)\n        rag_patterns.metadata[\"\
-          metadata\"][\"patterns\"].append(pattern_data)\n        with (patt_dir /\
-          \ \"pattern.json\").open(\"w+\", encoding=\"utf-8\") as pattern_details:\n\
-          \            json_dump(pattern_data, pattern_details, indent=2)\n\n    \
-          \    eval_data = evaluation_data_list[i] if i < len(evaluation_data_list)\
+          ),\n                test_data_key=test_data_key,\n                ls_ssl_verify=_ls_ssl_verify[0],\n\
+          \            )\n\n        # Flat schema: scores = per-metric aggregates\
+          \ (mean, ci_low, ci_high); final_score\n        pattern_data[\"scores\"\
+          ] = (getattr(eval, \"scores\", None) or {}).get(\"scores\") or {}\n    \
+          \    pattern_data[\"final_score\"] = getattr(eval, \"final_score\", None)\n\
+          \        rag_patterns.metadata[\"metadata\"][\"patterns\"].append(pattern_data)\n\
+          \        with (patt_dir / \"pattern.json\").open(\"w+\", encoding=\"utf-8\"\
+          ) as pattern_details:\n            json_dump(pattern_data, pattern_details,\
+          \ indent=2)\n\n        eval_data = evaluation_data_list[i] if i < len(evaluation_data_list)\
           \ else []\n        try:\n            q_scores = (eval.scores or {}).get(\"\
           question_scores\") or {}\n            if q_scores and all(isinstance(q_scores.get(k),\
           \ dict) for k in q_scores):\n                evaluation_result_list = ExperimentResults.create_evaluation_results_json(eval_data,\
