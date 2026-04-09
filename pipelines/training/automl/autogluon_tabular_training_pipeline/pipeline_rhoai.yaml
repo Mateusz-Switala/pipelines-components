@@ -1,3 +1,4 @@
+---
 # PIPELINE DEFINITION
 # Name: autogluon-tabular-training-pipeline
 # Description: End-to-end AutoGluon tabular training pipeline implementing a two-stage approach: first builds and selects top-performing models on sampled data, then refits them on the full dataset. The pipeline loads data from S3, splits it into train/test sets, trains multiple AutoGluon models using ensembling (stacking and bagging), selects the top N performers, refits each on the complete training data sequentially, and finally evaluates all refitted models to generate a comprehensive leaderboard with performance metrics.
@@ -152,21 +153,21 @@ deploymentSpec:
     exec-autogluon-models-training:
       container:
         args:
-        - --executor_input
-        - '{{$}}'
-        - --function_to_execute
-        - autogluon_models_training
+          - --executor_input
+          - '{{$}}'
+          - --function_to_execute
+          - autogluon_models_training
         command:
-        - sh
-        - -c
-        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          - sh
+          - -c
+          - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
           \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
           \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.15.2'\
           \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"\
           $0\" \"$@\"\n"
-        - sh
-        - -ec
-        - 'program_path=$(mktemp -d)
+          - sh
+          - -ec
+          - 'program_path=$(mktemp -d)
 
 
           printf "%s" "$0" > "$program_path/ephemeral_component.py"
@@ -379,21 +380,21 @@ deploymentSpec:
     exec-automl-data-loader:
       container:
         args:
-        - --executor_input
-        - '{{$}}'
-        - --function_to_execute
-        - automl_data_loader
+          - --executor_input
+          - '{{$}}'
+          - --function_to_execute
+          - automl_data_loader
         command:
-        - sh
-        - -c
-        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          - sh
+          - -c
+          - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
           \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
           \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.15.2'\
           \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"\
           $0\" \"$@\"\n"
-        - sh
-        - -ec
-        - 'program_path=$(mktemp -d)
+          - sh
+          - -ec
+          - 'program_path=$(mktemp -d)
 
 
           printf "%s" "$0" > "$program_path/ephemeral_component.py"
@@ -401,7 +402,7 @@ deploymentSpec:
           _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
 
           '
-        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
           \ *\n\ndef automl_data_loader(  # noqa: D417\n    file_key: str,\n    bucket_name:\
           \ str,\n    workspace_path: str,\n    label_column: str,\n    sampled_test_dataset:\
           \ dsl.Output[dsl.Dataset],\n    sampling_method: Optional[str] = None,\n\
@@ -634,21 +635,21 @@ deploymentSpec:
     exec-leaderboard-evaluation:
       container:
         args:
-        - --executor_input
-        - '{{$}}'
-        - --function_to_execute
-        - leaderboard_evaluation
+          - --executor_input
+          - '{{$}}'
+          - --function_to_execute
+          - leaderboard_evaluation
         command:
-        - sh
-        - -c
-        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          - sh
+          - -c
+          - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
           \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
           \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.15.2'\
           \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"\
           $0\" \"$@\"\n"
-        - sh
-        - -ec
-        - 'program_path=$(mktemp -d)
+          - sh
+          - -ec
+          - 'program_path=$(mktemp -d)
 
 
           printf "%s" "$0" > "$program_path/ephemeral_component.py"
@@ -766,7 +767,7 @@ root:
         componentRef:
           name: comp-autogluon-models-training
         dependentTasks:
-        - automl-data-loader
+          - automl-data-loader
         inputs:
           artifacts:
             test_data:
@@ -835,7 +836,7 @@ root:
         componentRef:
           name: comp-leaderboard-evaluation
         dependentTasks:
-        - autogluon-models-training
+          - autogluon-models-training
         inputs:
           artifacts:
             models_artifact:
@@ -883,22 +884,22 @@ platforms:
       executors:
         exec-automl-data-loader:
           secretAsEnv:
-          - keyToEnv:
-            - envVar: AWS_ACCESS_KEY_ID
-              secretKey: AWS_ACCESS_KEY_ID
-            - envVar: AWS_SECRET_ACCESS_KEY
-              secretKey: AWS_SECRET_ACCESS_KEY
-            - envVar: AWS_S3_ENDPOINT
-              secretKey: AWS_S3_ENDPOINT
-            - envVar: AWS_DEFAULT_REGION
-              secretKey: AWS_DEFAULT_REGION
-            optional: true
-            secretNameParameter:
-              componentInputParameter: train_data_secret_name
+            - keyToEnv:
+                - envVar: AWS_ACCESS_KEY_ID
+                  secretKey: AWS_ACCESS_KEY_ID
+                - envVar: AWS_SECRET_ACCESS_KEY
+                  secretKey: AWS_SECRET_ACCESS_KEY
+                - envVar: AWS_S3_ENDPOINT
+                  secretKey: AWS_S3_ENDPOINT
+                - envVar: AWS_DEFAULT_REGION
+                  secretKey: AWS_DEFAULT_REGION
+              optional: true
+              secretNameParameter:
+                componentInputParameter: train_data_secret_name
     pipelineConfig:
       workspace:
         kubernetes:
           pvcSpecPatch:
             accessModes:
-            - ReadWriteOnce
+              - ReadWriteOnce
         size: 12Gi

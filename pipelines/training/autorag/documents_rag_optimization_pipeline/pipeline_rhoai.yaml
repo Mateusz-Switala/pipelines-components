@@ -1,3 +1,4 @@
+---
 # PIPELINE DEFINITION
 # Name: documents-rag-optimization-pipeline
 # Description: Automated system for building and optimizing Retrieval-Augmented Generation (RAG) applications
@@ -292,21 +293,21 @@ deploymentSpec:
     exec-documents-discovery:
       container:
         args:
-        - --executor_input
-        - '{{$}}'
-        - --function_to_execute
-        - documents_discovery
+          - --executor_input
+          - '{{$}}'
+          - --function_to_execute
+          - documents_discovery
         command:
-        - sh
-        - -c
-        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          - sh
+          - -c
+          - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
           \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
           \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.15.2'\
           \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"\
           $0\" \"$@\"\n"
-        - sh
-        - -ec
-        - 'program_path=$(mktemp -d)
+          - sh
+          - -ec
+          - 'program_path=$(mktemp -d)
 
 
           printf "%s" "$0" > "$program_path/ephemeral_component.py"
@@ -314,7 +315,7 @@ deploymentSpec:
           _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
 
           '
-        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
           \ *\n\ndef documents_discovery(\n    input_data_bucket_name: str,\n    input_data_path:\
           \ str = \"\",\n    test_data: dsl.Input[dsl.Artifact] = None,\n    sampling_enabled:\
           \ bool = True,\n    sampling_max_size: float = 1,\n    discovered_documents:\
@@ -394,21 +395,21 @@ deploymentSpec:
     exec-leaderboard-evaluation:
       container:
         args:
-        - --executor_input
-        - '{{$}}'
-        - --function_to_execute
-        - leaderboard_evaluation
+          - --executor_input
+          - '{{$}}'
+          - --function_to_execute
+          - leaderboard_evaluation
         command:
-        - sh
-        - -c
-        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          - sh
+          - -c
+          - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
           \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
           \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.15.2'\
           \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"\
           $0\" \"$@\"\n"
-        - sh
-        - -ec
-        - 'program_path=$(mktemp -d)
+          - sh
+          - -ec
+          - 'program_path=$(mktemp -d)
 
 
           printf "%s" "$0" > "$program_path/ephemeral_component.py"
@@ -416,7 +417,7 @@ deploymentSpec:
           _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
 
           '
-        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
           \ *\n\ndef leaderboard_evaluation(\n    rag_patterns: dsl.InputPath(dsl.Artifact),\n\
           \    html_artifact: dsl.Output[dsl.HTML],\n    optimization_metric: str\
           \ = \"faithfulness\",\n):\n    \"\"\"Build an HTML leaderboard artifact\
@@ -675,21 +676,21 @@ deploymentSpec:
     exec-prepare-responses-api-requests:
       container:
         args:
-        - --executor_input
-        - '{{$}}'
-        - --function_to_execute
-        - prepare_responses_api_requests
+          - --executor_input
+          - '{{$}}'
+          - --function_to_execute
+          - prepare_responses_api_requests
         command:
-        - sh
-        - -c
-        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          - sh
+          - -c
+          - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
           \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
           \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.15.2'\
           \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"\
           $0\" \"$@\"\n"
-        - sh
-        - -ec
-        - 'program_path=$(mktemp -d)
+          - sh
+          - -ec
+          - 'program_path=$(mktemp -d)
 
 
           printf "%s" "$0" > "$program_path/ephemeral_component.py"
@@ -697,7 +698,7 @@ deploymentSpec:
           _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
 
           '
-        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
           \ *\n\ndef prepare_responses_api_requests(\n    rag_patterns: dsl.InputPath(dsl.Artifact),\n\
           \    responses_api_artifacts: dsl.Output[dsl.Artifact],\n):\n    \"\"\"\
           Emit one Llama Stack ``POST /v1/responses`` JSON body per RAG pattern directory.\n\
@@ -955,21 +956,21 @@ deploymentSpec:
     exec-rag-templates-optimization:
       container:
         args:
-        - --executor_input
-        - '{{$}}'
-        - --function_to_execute
-        - rag_templates_optimization
+          - --executor_input
+          - '{{$}}'
+          - --function_to_execute
+          - rag_templates_optimization
         command:
-        - sh
-        - -c
-        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          - sh
+          - -c
+          - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
           \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
           \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.15.2'\
           \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"\
           $0\" \"$@\"\n"
-        - sh
-        - -ec
-        - 'program_path=$(mktemp -d)
+          - sh
+          - -ec
+          - 'program_path=$(mktemp -d)
 
 
           printf "%s" "$0" > "$program_path/ephemeral_component.py"
@@ -1532,21 +1533,21 @@ deploymentSpec:
     exec-search-space-preparation:
       container:
         args:
-        - --executor_input
-        - '{{$}}'
-        - --function_to_execute
-        - search_space_preparation
+          - --executor_input
+          - '{{$}}'
+          - --function_to_execute
+          - search_space_preparation
         command:
-        - sh
-        - -c
-        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          - sh
+          - -c
+          - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
           \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
           \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.15.2'\
           \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"\
           $0\" \"$@\"\n"
-        - sh
-        - -ec
-        - 'program_path=$(mktemp -d)
+          - sh
+          - -ec
+          - 'program_path=$(mktemp -d)
 
 
           printf "%s" "$0" > "$program_path/ephemeral_component.py"
@@ -1554,7 +1555,7 @@ deploymentSpec:
           _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
 
           '
-        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
           \ *\n\ndef search_space_preparation(\n    test_data: dsl.Input[dsl.Artifact],\n\
           \    extracted_text: dsl.Input[dsl.Artifact],\n    search_space_prep_report:\
           \ dsl.Output[dsl.Artifact],\n    chat_model_url: Optional[str] = None,\n\
@@ -1772,21 +1773,21 @@ deploymentSpec:
     exec-test-data-loader:
       container:
         args:
-        - --executor_input
-        - '{{$}}'
-        - --function_to_execute
-        - test_data_loader
+          - --executor_input
+          - '{{$}}'
+          - --function_to_execute
+          - test_data_loader
         command:
-        - sh
-        - -c
-        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          - sh
+          - -c
+          - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
           \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
           \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.15.2'\
           \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"\
           $0\" \"$@\"\n"
-        - sh
-        - -ec
-        - 'program_path=$(mktemp -d)
+          - sh
+          - -ec
+          - 'program_path=$(mktemp -d)
 
 
           printf "%s" "$0" > "$program_path/ephemeral_component.py"
@@ -1794,7 +1795,7 @@ deploymentSpec:
           _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
 
           '
-        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
           \ *\n\ndef test_data_loader(test_data_bucket_name: str, test_data_path:\
           \ str, test_data: dsl.Output[dsl.Artifact] = None):\n    \"\"\"Download\
           \ test data json file from S3 into a KFP artifact.\n\n    The component\
@@ -1862,21 +1863,21 @@ deploymentSpec:
     exec-text-extraction:
       container:
         args:
-        - --executor_input
-        - '{{$}}'
-        - --function_to_execute
-        - text_extraction
+          - --executor_input
+          - '{{$}}'
+          - --function_to_execute
+          - text_extraction
         command:
-        - sh
-        - -c
-        - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
+          - sh
+          - -c
+          - "\nif ! [ -x \"$(command -v pip)\" ]; then\n    python3 -m ensurepip ||\
           \ python3 -m ensurepip --user || apt-get install python3-pip\nfi\n\nPIP_DISABLE_PIP_VERSION_CHECK=1\
           \ python3 -m pip install --quiet --no-warn-script-location 'kfp==2.15.2'\
           \ '--no-deps' 'typing-extensions>=3.7.4,<5; python_version<\"3.9\"' && \"\
           $0\" \"$@\"\n"
-        - sh
-        - -ec
-        - 'program_path=$(mktemp -d)
+          - sh
+          - -ec
+          - 'program_path=$(mktemp -d)
 
 
           printf "%s" "$0" > "$program_path/ephemeral_component.py"
@@ -1884,7 +1885,7 @@ deploymentSpec:
           _KFP_RUNTIME=true python3 -m kfp.dsl.executor_main                         --component_module_path                         "$program_path/ephemeral_component.py"                         "$@"
 
           '
-        - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
+          - "\nimport kfp\nfrom kfp import dsl\nfrom kfp.dsl import *\nfrom typing import\
           \ *\n\ndef text_extraction(\n    documents_descriptor: dsl.Input[dsl.Artifact],\n\
           \    extracted_text: dsl.Output[dsl.Artifact],\n    error_tolerance: Optional[float]\
           \ = None,\n    max_extraction_workers: Optional[int] = None,\n):\n    \"\
@@ -2165,7 +2166,7 @@ root:
         componentRef:
           name: comp-documents-discovery
         dependentTasks:
-        - test-data-loader
+          - test-data-loader
         inputs:
           artifacts:
             test_data:
@@ -2184,7 +2185,7 @@ root:
         componentRef:
           name: comp-leaderboard-evaluation
         dependentTasks:
-        - rag-templates-optimization
+          - rag-templates-optimization
         inputs:
           artifacts:
             rag_patterns:
@@ -2198,7 +2199,7 @@ root:
         componentRef:
           name: comp-prepare-responses-api-requests
         dependentTasks:
-        - rag-templates-optimization
+          - rag-templates-optimization
         inputs:
           artifacts:
             rag_patterns:
@@ -2212,9 +2213,9 @@ root:
         componentRef:
           name: comp-rag-templates-optimization
         dependentTasks:
-        - search-space-preparation
-        - test-data-loader
-        - text-extraction
+          - search-space-preparation
+          - test-data-loader
+          - text-extraction
         inputs:
           artifacts:
             extracted_text:
@@ -2252,8 +2253,8 @@ root:
         componentRef:
           name: comp-search-space-preparation
         dependentTasks:
-        - test-data-loader
-        - text-extraction
+          - test-data-loader
+          - text-extraction
         inputs:
           artifacts:
             extracted_text:
@@ -2288,7 +2289,7 @@ root:
         componentRef:
           name: comp-text-extraction
         dependentTasks:
-        - documents-discovery
+          - documents-discovery
         inputs:
           artifacts:
             documents_descriptor:
@@ -2373,73 +2374,73 @@ platforms:
       executors:
         exec-documents-discovery:
           secretAsEnv:
-          - keyToEnv:
-            - envVar: AWS_ACCESS_KEY_ID
-              secretKey: AWS_ACCESS_KEY_ID
-            - envVar: AWS_SECRET_ACCESS_KEY
-              secretKey: AWS_SECRET_ACCESS_KEY
-            - envVar: AWS_S3_ENDPOINT
-              secretKey: AWS_S3_ENDPOINT
-            - envVar: AWS_DEFAULT_REGION
-              secretKey: AWS_DEFAULT_REGION
-            optional: false
-            secretNameParameter:
-              componentInputParameter: input_data_secret_name
+            - keyToEnv:
+                - envVar: AWS_ACCESS_KEY_ID
+                  secretKey: AWS_ACCESS_KEY_ID
+                - envVar: AWS_SECRET_ACCESS_KEY
+                  secretKey: AWS_SECRET_ACCESS_KEY
+                - envVar: AWS_S3_ENDPOINT
+                  secretKey: AWS_S3_ENDPOINT
+                - envVar: AWS_DEFAULT_REGION
+                  secretKey: AWS_DEFAULT_REGION
+              optional: false
+              secretNameParameter:
+                componentInputParameter: input_data_secret_name
         exec-prepare-responses-api-requests:
           secretAsEnv:
-          - keyToEnv:
-            - envVar: LLAMA_STACK_CLIENT_BASE_URL
-              secretKey: LLAMA_STACK_CLIENT_BASE_URL
-            - envVar: LLAMA_STACK_CLIENT_API_KEY
-              secretKey: LLAMA_STACK_CLIENT_API_KEY
-            optional: false
-            secretNameParameter:
-              componentInputParameter: llama_stack_secret_name
+            - keyToEnv:
+                - envVar: LLAMA_STACK_CLIENT_BASE_URL
+                  secretKey: LLAMA_STACK_CLIENT_BASE_URL
+                - envVar: LLAMA_STACK_CLIENT_API_KEY
+                  secretKey: LLAMA_STACK_CLIENT_API_KEY
+              optional: false
+              secretNameParameter:
+                componentInputParameter: llama_stack_secret_name
         exec-rag-templates-optimization:
           secretAsEnv:
-          - keyToEnv:
-            - envVar: LLAMA_STACK_CLIENT_BASE_URL
-              secretKey: LLAMA_STACK_CLIENT_BASE_URL
-            - envVar: LLAMA_STACK_CLIENT_API_KEY
-              secretKey: LLAMA_STACK_CLIENT_API_KEY
-            optional: false
-            secretNameParameter:
-              componentInputParameter: llama_stack_secret_name
+            - keyToEnv:
+                - envVar: LLAMA_STACK_CLIENT_BASE_URL
+                  secretKey: LLAMA_STACK_CLIENT_BASE_URL
+                - envVar: LLAMA_STACK_CLIENT_API_KEY
+                  secretKey: LLAMA_STACK_CLIENT_API_KEY
+              optional: false
+              secretNameParameter:
+                componentInputParameter: llama_stack_secret_name
         exec-search-space-preparation:
           secretAsEnv:
-          - keyToEnv:
-            - envVar: LLAMA_STACK_CLIENT_BASE_URL
-              secretKey: LLAMA_STACK_CLIENT_BASE_URL
-            - envVar: LLAMA_STACK_CLIENT_API_KEY
-              secretKey: LLAMA_STACK_CLIENT_API_KEY
-            optional: false
-            secretNameParameter:
-              componentInputParameter: llama_stack_secret_name
+            - keyToEnv:
+                - envVar: LLAMA_STACK_CLIENT_BASE_URL
+                  secretKey: LLAMA_STACK_CLIENT_BASE_URL
+                - envVar: LLAMA_STACK_CLIENT_API_KEY
+                  secretKey: LLAMA_STACK_CLIENT_API_KEY
+              optional: false
+              secretNameParameter:
+                componentInputParameter: llama_stack_secret_name
         exec-test-data-loader:
           secretAsEnv:
-          - keyToEnv:
-            - envVar: AWS_ACCESS_KEY_ID
-              secretKey: AWS_ACCESS_KEY_ID
-            - envVar: AWS_SECRET_ACCESS_KEY
-              secretKey: AWS_SECRET_ACCESS_KEY
-            - envVar: AWS_S3_ENDPOINT
-              secretKey: AWS_S3_ENDPOINT
-            - envVar: AWS_DEFAULT_REGION
-              secretKey: AWS_DEFAULT_REGION
-            optional: false
-            secretNameParameter:
-              componentInputParameter: test_data_secret_name
+            - keyToEnv:
+                - envVar: AWS_ACCESS_KEY_ID
+                  secretKey: AWS_ACCESS_KEY_ID
+                - envVar: AWS_SECRET_ACCESS_KEY
+                  secretKey: AWS_SECRET_ACCESS_KEY
+                - envVar: AWS_S3_ENDPOINT
+                  secretKey: AWS_S3_ENDPOINT
+                - envVar: AWS_DEFAULT_REGION
+                  secretKey: AWS_DEFAULT_REGION
+              optional: false
+              secretNameParameter:
+                componentInputParameter: test_data_secret_name
         exec-text-extraction:
           secretAsEnv:
-          - keyToEnv:
-            - envVar: AWS_ACCESS_KEY_ID
-              secretKey: AWS_ACCESS_KEY_ID
-            - envVar: AWS_SECRET_ACCESS_KEY
-              secretKey: AWS_SECRET_ACCESS_KEY
-            - envVar: AWS_S3_ENDPOINT
-              secretKey: AWS_S3_ENDPOINT
-            - envVar: AWS_DEFAULT_REGION
-              secretKey: AWS_DEFAULT_REGION
-            optional: false
-            secretNameParameter:
-              componentInputParameter: input_data_secret_name
+            - keyToEnv:
+                - envVar: AWS_ACCESS_KEY_ID
+                  secretKey: AWS_ACCESS_KEY_ID
+                - envVar: AWS_SECRET_ACCESS_KEY
+                  secretKey: AWS_SECRET_ACCESS_KEY
+                - envVar: AWS_S3_ENDPOINT
+                  secretKey: AWS_S3_ENDPOINT
+                - envVar: AWS_DEFAULT_REGION
+                  secretKey: AWS_DEFAULT_REGION
+              optional: false
+              secretNameParameter:
+                componentInputParameter: input_data_secret_name
