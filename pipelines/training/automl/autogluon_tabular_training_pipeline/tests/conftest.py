@@ -709,6 +709,31 @@ def compiled_pipeline_path():
     Path(path).unlink(missing_ok=True)
 
 
+@pytest.fixture(scope="session")
+def compiled_pipeline_path(_compiled_tabular_pipeline_package_from_source):
+    """Pipeline package path compiled from source (non-parametrized; used by functional tests)."""
+    return _compiled_tabular_pipeline_package_from_source
+
+
+@pytest.fixture(
+    scope="session",
+    params=["compile_from_source", "committed_pipeline_yaml"],
+    ids=["compile-from-source", "committed-pipeline-yaml"],
+)
+def pipeline_package_path(request):
+    """KFP pipeline package path: fresh compile or repo-root ``pipeline.yaml``.
+
+    Integration tests run twice per scenario so both the checked-in artifact and
+    current Python sources are exercised on the cluster.
+    """
+    if request.param == "compile_from_source":
+        return request.getfixturevalue("_compiled_tabular_pipeline_package_from_source")
+    committed = Path(__file__).resolve().parent.parent / "pipeline.yaml"
+    if not committed.is_file():
+        pytest.skip(f"Committed pipeline YAML not found: {committed}")
+    return str(committed.resolve())
+
+
 @pytest.fixture
 def pipeline_run_timeout():
     """Timeout in seconds for waiting on a pipeline run (override via env)."""
