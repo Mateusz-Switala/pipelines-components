@@ -9,24 +9,10 @@ from kfp_components.utils.compiled_pipeline_alignment import (
 
 _yaml_path = Path(__file__).resolve().parent.parent / "pipeline.yaml"
 
-
-def _set_automl_image_from_yaml(yaml_path: Path) -> None:
-    """Set RELATED_IMAGE_MPI_AUTOML_RUNTIME from the committed pipeline.yaml if not already set."""
-    if os.environ.get("RELATED_IMAGE_MPI_AUTOML_RUNTIME") or not yaml_path.is_file():
-        return
-    import yaml
-
-    with yaml_path.open() as f:
-        for doc in yaml.safe_load_all(f):
-            if isinstance(doc, dict) and "deploymentSpec" in doc:
-                for executor in doc["deploymentSpec"].get("executors", {}).values():
-                    img = executor.get("container", {}).get("image")
-                    if img:
-                        os.environ["RELATED_IMAGE_MPI_AUTOML_RUNTIME"] = img
-                        return
-
-
-_set_automl_image_from_yaml(_yaml_path)
+os.environ.setdefault(
+    "RELATED_IMAGE_MPI_AUTOML_RUNTIME",
+    "registry.redhat.io/rhoai/odh-automl-rhel9@sha256:6d4da6c8201577db131f37d6a8572b13b6c1d01a64115b6685ffe8e053f5fe79",
+)
 
 from ..pipeline import autogluon_tabular_training_pipeline  # noqa: E402
 
