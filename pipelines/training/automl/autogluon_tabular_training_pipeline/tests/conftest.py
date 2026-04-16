@@ -693,8 +693,8 @@ def kfp_client(rhoai_integration_config, datascience_pipelines_application, temp
 
 
 @pytest.fixture(scope="session")
-def compiled_pipeline_path():
-    """Compile the AutoGluon tabular training pipeline to a temp YAML file."""
+def _compiled_tabular_pipeline_package_from_source():
+    """Session temp path: compile tabular training pipeline from ``pipeline.py`` (teardown unlinks)."""
     from kfp import compiler
 
     from ..pipeline import autogluon_tabular_training_pipeline
@@ -711,7 +711,7 @@ def compiled_pipeline_path():
 
 @pytest.fixture(scope="session")
 def compiled_pipeline_path(_compiled_tabular_pipeline_package_from_source):
-    """Pipeline package path compiled from source (non-parametrized; used by functional tests)."""
+    """Temp path to pipeline package YAML compiled from source (integration + functional tests)."""
     return _compiled_tabular_pipeline_package_from_source
 
 
