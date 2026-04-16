@@ -8,6 +8,8 @@ normalization:
 * **KFP embedded notebook archives** (``__KFP_EMBEDDED_ARCHIVE_B64 = '...'``)
   are replaced with a placeholder; the base64 payload changes whenever templates
   are re-embedded at compile time.
+* **KFP SDK version** strings embedded in launcher ``pip install ... 'kfp==x.y.z'`` are
+  redacted so the check is stable across ``uv.lock`` bumps when structure is unchanged.
 
 Re-compile and commit ``pipeline.yaml`` when pipeline or component **source**
 under those sections changes.
@@ -41,6 +43,9 @@ _RE_KFP_EMBEDDED_ARCHIVE_B64_DOUBLE = re.compile(
     r'__KFP_EMBEDDED_ARCHIVE_B64\s*=\s*"[^"]*"',
     re.DOTALL,
 )
+# KFP compiler embeds the locally installed SDK pin in launcher shell (pip install ... 'kfp==x.y.z').
+# Checked-in YAML may lag uv.lock; redact so the alignment test compares structure, not pin drift.
+_RE_KFP_SDK_PIN = re.compile(r"kfp==[0-9]+\.[0-9]+\.[0-9]+")
 
 _COMPARISON_KEYS = ("components", "root", "pipelineInfo", "deploymentSpec")
 
@@ -55,6 +60,11 @@ def _redact_kfp_embedded_archive_assignments(s: str) -> str:
         '__KFP_EMBEDDED_ARCHIVE_B64 = "__REDACTED__"',
         s,
     )
+
+
+def _redact_kfp_sdk_version_pin(s: str) -> str:
+    """Replace embedded ``kfp==x.y.z`` pip pins so IR compares across lockfile bumps."""
+    return _RE_KFP_SDK_PIN.sub("kfp==__REDACTED_KFP_SDK__", s)
 
 
 def _normalize_command_source_lines(s: str) -> str:
@@ -76,6 +86,7 @@ def sanitize_for_pipeline_comparison(obj: Any) -> Any:
         return [sanitize_for_pipeline_comparison(item) for item in obj]
     if isinstance(obj, str):
         text = _redact_kfp_embedded_archive_assignments(obj)
+        text = _redact_kfp_sdk_version_pin(text)
         if "def " in text and "import kfp" in text:
             text = _normalize_command_source_lines(text)
         return text
