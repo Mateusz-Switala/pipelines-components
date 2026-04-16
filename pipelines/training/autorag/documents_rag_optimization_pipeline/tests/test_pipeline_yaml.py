@@ -11,7 +11,7 @@ _yaml_path = Path(__file__).resolve().parent.parent / "pipeline.yaml"
 
 os.environ.setdefault(
     "RELATED_IMAGE_MPI_AUTORAG_RUNTIME",
-    "registry.redhat.io/rhoai/odh-autorag-rhel9@sha256:152c98afbf558367807d9dc0bd0a203a71936476039c7130eeecc079d0605cf2",
+    "registry.redhat.io/rhoai/odh-autorag-rhel9@sha256:d7e8f36fdc923c0ae2d1ac72470927881c898da591b163116b0dc32fe839164a",
 )
 
 from ..pipeline import documents_rag_optimization_pipeline  # noqa: E402

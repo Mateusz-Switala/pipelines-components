@@ -11,7 +11,7 @@ _yaml_path = Path(__file__).resolve().parent.parent / "pipeline.yaml"
 
 os.environ.setdefault(
     "RELATED_IMAGE_MPI_AUTOML_RUNTIME",
-    "registry.redhat.io/rhoai/odh-automl-rhel9@sha256:6d4da6c8201577db131f37d6a8572b13b6c1d01a64115b6685ffe8e053f5fe79",
+    "registry.redhat.io/rhoai/odh-automl-rhel9@sha256:d943beee403c071e18b939206aa6f6284135644070181bb8d350baf056cc0564",
 )
 
 from ..pipeline import autogluon_timeseries_training_pipeline  # noqa: E402
