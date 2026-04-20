@@ -8,9 +8,12 @@ resolution-markers = [
     "python_full_version == '3.13.*' and sys_platform == 'win32'",
     "python_full_version == '3.13.*' and sys_platform == 'emscripten'",
     "python_full_version == '3.13.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
-    "python_full_version < '3.13' and sys_platform == 'win32'",
-    "python_full_version < '3.13' and sys_platform == 'emscripten'",
-    "python_full_version < '3.13' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "python_full_version == '3.12.*' and sys_platform == 'win32'",
+    "python_full_version < '3.12' and sys_platform == 'win32'",
+    "python_full_version == '3.12.*' and sys_platform == 'emscripten'",
+    "python_full_version < '3.12' and sys_platform == 'emscripten'",
+    "python_full_version == '3.12.*' and sys_platform != 'emscripten' and sys_platform != 'win32'",
+    "python_full_version < '3.12' and sys_platform != 'emscripten' and sys_platform != 'win32'",
 ]
 
 [[package]]
@@ -1281,7 +1284,6 @@ test-automl = [
     { name = "jinja2" },
     { name = "kfp" },
     { name = "kfp-kubernetes" },
-    { name = "kubernetes" },
     { name = "packaging" },
     { name = "pip" },
     { name = "pytest" },
@@ -1308,7 +1310,6 @@ requires-dist = [
     { name = "kfp-components", extras = ["test"], marker = "extra == 'test-automl'" },
     { name = "kfp-kubernetes", specifier = ">=2.15.2" },
     { name = "kfp-kubernetes", marker = "extra == 'test'" },
-    { name = "kubernetes", marker = "extra == 'test-automl'" },
     { name = "packaging", marker = "extra == 'test'" },
     { name = "pip", marker = "extra == 'test'" },
     { name = "pytest", marker = "extra == 'test'" },

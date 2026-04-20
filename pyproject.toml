@@ -47,7 +47,6 @@ test_automl = [
     "kfp==2.15.2",
     "kfp-components[test]",
     "boto3",
-    "kubernetes",
     "python-dotenv",
     "pytest-xdist",
 ]
