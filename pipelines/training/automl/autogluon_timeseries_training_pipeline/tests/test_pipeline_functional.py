@@ -74,6 +74,9 @@ _DEFAULT_CONFIG_PATH = _TESTS_DIR / "functional_test_configs.json"
 _REPORT_PARTS_DIR = _TESTS_DIR / ".report_parts"
 MAX_RUN_DURATION_SECONDS = 3600  # 1 hour hard limit
 
+# Expected primary metric key for timeseries models (AutoGluon uses MASE as its default eval metric).
+_TS_PRIMARY_METRIC = "MASE"
+
 # KServe API constants
 _KSERVE_GROUP = "serving.kserve.io"
 _KSERVE_ISVC_VERSION = "v1beta1"
@@ -283,7 +286,8 @@ def _collect_model_metrics_and_sizes(s3_client, bucket: str, run_prefix: str) ->
 
     Returns:
         list of dicts with keys:
-            {model_name, metrics, artifact_key, total_predictor_size_bytes, total_predictor_size_mb}
+            {model_name, metrics, artifact_key, total_predictor_size_bytes,
+             total_predictor_size_mb, notebook_key}
     """
     objects = _list_s3_objects(s3_client, bucket, run_prefix)
 
@@ -302,15 +306,19 @@ def _collect_model_metrics_and_sizes(s3_client, bucket: str, run_prefix: str) ->
                     "metrics": data,
                     "artifact_key": key,
                     "total_predictor_size_bytes": 0,
+                    "notebook_key": None,
                 }
 
-    # Sum sizes of objects under <ModelName>/predictor/ for each model
+    # Sum predictor sizes and record notebook keys in a single pass (no early break so
+    # both conditions are evaluated for every object against every model).
     for obj in objects:
         key = obj["Key"]
-        for model_name in metrics_by_model:
+        size = obj.get("Size", 0)
+        for model_name, entry in metrics_by_model.items():
             if f"/{model_name}/predictor/" in key:
-                metrics_by_model[model_name]["total_predictor_size_bytes"] += obj.get("Size", 0)
-                break
+                entry["total_predictor_size_bytes"] += size
+            if key.endswith("automl_predictor_notebook.ipynb") and f"/{model_name}/notebooks/" in key:
+                entry["notebook_key"] = key
 
     for entry in metrics_by_model.values():
         entry["total_predictor_size_mb"] = round(entry["total_predictor_size_bytes"] / (1024 * 1024), 2)
@@ -331,6 +339,40 @@ def _delete_s3_objects(s3_client, bucket: str, keys: list[str]) -> int:
         except Exception as e:
             logger.warning("Failed to delete %d objects from s3://%s: %s", len(batch), bucket, e)
     return deleted
+
+
+def _find_leaderboard_html(s3_client, bucket: str, run_prefix: str) -> tuple[str | None, str | None]:
+    """Find the leaderboard HTML artifact produced by timeseries_leaderboard_evaluation in S3.
+
+    KFP stores the artifact under a node-scoped key that contains the artifact name
+    ``html_artifact`` in the path. Returns (s3_key, html_content) on success or
+    (None, None) if not found.
+    """
+    objects = _list_s3_objects(s3_client, bucket, run_prefix)
+    for obj in objects:
+        key = obj["Key"]
+        if "html_artifact" in key:
+            try:
+                resp = s3_client.get_object(Bucket=bucket, Key=key)
+                content = resp["Body"].read().decode("utf-8")
+                return key, content
+            except Exception as exc:
+                logger.warning("Failed to read leaderboard HTML s3://%s/%s: %s", bucket, key, exc)
+                return key, None
+    return None, None
+
+
+def _find_test_dataset_csv(s3_client, bucket: str, run_prefix: str) -> str | None:
+    """Find the sampled_test_dataset artifact produced by timeseries_data_loader in S3.
+
+    KFP stores the artifact under a node-scoped key that contains the artifact name
+    ``sampled_test_dataset`` in the path. Returns the S3 key or None if not found.
+    """
+    objects = _list_s3_objects(s3_client, bucket, run_prefix)
+    for obj in objects:
+        if "sampled_test_dataset" in obj["Key"]:
+            return obj["Key"]
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -1248,7 +1290,7 @@ class TestTimeseriesPipelineFunctional:
         )
 
         # ------------------------------------------------------------------
-        # 5. Read metrics and measure model sizes from S3 artifacts
+        # 5. Read metrics, model sizes, leaderboard, and test dataset from S3
         # ------------------------------------------------------------------
         run_prefix = f"{PIPELINE_DISPLAY_NAME}/{run_id}"
         s3_cleanup_tracker.track_artifact_prefix(artifacts_bucket, run_prefix)
@@ -1256,17 +1298,33 @@ class TestTimeseriesPipelineFunctional:
         metrics_list = _collect_model_metrics_and_sizes(s3_client, artifacts_bucket, run_prefix)
 
         logger.info(
-            "Scenario %s: found %d models",
+            "Scenario %s: found %d models (top_n=%d)",
             func_config.id,
             len(metrics_list),
+            func_config.top_n,
         )
         for m in metrics_list:
             logger.info(
-                "  Model: %s | Predictor: %.2f MB | Metrics: %s",
+                "  Model: %s | Predictor: %.2f MB | Notebook: %s | Metrics: %s",
                 m["model_name"],
                 m["total_predictor_size_mb"],
+                m["notebook_key"] or "(not found)",
                 json.dumps(m["metrics"], default=str),
             )
+
+        leaderboard_key, leaderboard_html = _find_leaderboard_html(s3_client, artifacts_bucket, run_prefix)
+        logger.info(
+            "Scenario %s: leaderboard HTML artifact — %s",
+            func_config.id,
+            f"s3://{artifacts_bucket}/{leaderboard_key}" if leaderboard_key else "(not found)",
+        )
+
+        test_dataset_key = _find_test_dataset_csv(s3_client, artifacts_bucket, run_prefix)
+        logger.info(
+            "Scenario %s: sampled_test_dataset artifact — %s",
+            func_config.id,
+            f"s3://{artifacts_bucket}/{test_dataset_key}" if test_dataset_key else "(not found)",
+        )
 
         # ------------------------------------------------------------------
         # 6. [Optional] Deploy top-1 model via KServe and validate
@@ -1311,9 +1369,12 @@ class TestTimeseriesPipelineFunctional:
                         "metrics": m["metrics"],
                         "total_predictor_size_bytes": m["total_predictor_size_bytes"],
                         "total_predictor_size_mb": m["total_predictor_size_mb"],
+                        "notebook_key": m["notebook_key"],
                     }
                     for m in metrics_list
                 ],
+                "leaderboard_artifact_key": leaderboard_key,
+                "test_dataset_artifact_key": test_dataset_key,
                 "deployment": deployment_result,
                 "config": asdict(func_config),
             },
@@ -1327,9 +1388,51 @@ class TestTimeseriesPipelineFunctional:
             f"({elapsed_seconds:.0f} s), exceeding the 1-hour limit"
         )
 
+        # At least 1 model produced; warn (don't fail) if fewer than top_n.
         assert len(metrics_list) >= 1, (
             f"Expected at least 1 model with metrics for scenario {func_config.id}; "
             f"found {len(metrics_list)} under s3://{artifacts_bucket}/{run_prefix}"
+        )
+        if len(metrics_list) < func_config.top_n:
+            logger.warning(
+                "Scenario %s: found %d models but top_n=%d — "
+                "AutoGluon may have trained fewer models than requested on this dataset",
+                func_config.id,
+                len(metrics_list),
+                func_config.top_n,
+            )
+
+        # Validate metrics content: all values must be numeric and MASE must be present
+        # (guarantees predictor_refit.evaluate() ran to completion).
+        for m in metrics_list:
+            model_name = m["model_name"]
+            metrics = m["metrics"]
+            assert len(metrics) >= 1, f"Model {model_name!r} in scenario {func_config.id} has no metrics"
+            non_numeric = {k: v for k, v in metrics.items() if not isinstance(v, (int, float))}
+            assert not non_numeric, f"Model {model_name!r} has non-numeric metric values: {non_numeric}"
+            assert _TS_PRIMARY_METRIC in metrics, (
+                f"Primary metric {_TS_PRIMARY_METRIC!r} missing from model {model_name!r}; "
+                f"got keys: {sorted(metrics.keys())}"
+            )
+
+        # Validate that a notebook was written to S3 for every model.
+        for m in metrics_list:
+            assert m["notebook_key"] is not None, (
+                f"Notebook automl_predictor_notebook.ipynb not found in S3 "
+                f"for model {m['model_name']!r} in scenario {func_config.id}"
+            )
+
+        # Validate leaderboard HTML artifact from timeseries_leaderboard_evaluation component.
+        assert leaderboard_key is not None, (
+            f"Leaderboard HTML artifact not found in S3 under s3://{artifacts_bucket}/{run_prefix}"
+        )
+        assert leaderboard_html and "<html" in leaderboard_html.lower(), (
+            f"Leaderboard HTML at s3://{artifacts_bucket}/{leaderboard_key} is empty or has no <html> element"
+        )
+
+        # Validate sampled_test_dataset artifact from timeseries_data_loader.
+        assert test_dataset_key is not None, (
+            f"sampled_test_dataset artifact not found in S3 under s3://{artifacts_bucket}/{run_prefix}"
         )
 
         if DEPLOY_AFTER_TRAINING and not deployment_result.get("skipped"):
