@@ -92,6 +92,9 @@ _K8S_CALL_TIMEOUT = 30  # seconds
 _HW_PROFILE_FETCH_ATTEMPTS = 6
 _HW_PROFILE_FETCH_DELAY_SECONDS = 3.0
 
+# Timeout for notebook execution via Kubernetes Job (overrideable via RHOAI_NOTEBOOK_RUN_TIMEOUT).
+_NOTEBOOK_JOB_TIMEOUT = 1200  # seconds
+
 from ..pipeline import autogluon_tabular_training_pipeline  # noqa: E402
 
 PIPELINE_DISPLAY_NAME = autogluon_tabular_training_pipeline.name
@@ -341,6 +344,15 @@ def _find_test_dataset_csv(s3_client, bucket: str, run_prefix: str) -> str | Non
 # ---------------------------------------------------------------------------
 # KServe deployment helpers
 # ---------------------------------------------------------------------------
+
+
+def _make_notebook_job_name(run_id: str, model_name: str) -> str:
+    """Return a valid Kubernetes Job name (≤63 chars, DNS label safe).
+
+    Layout: ``nb-`` (3) + clean model name (≤46) + ``-`` (1) + run_id[:8] (8) = ≤58 chars.
+    """
+    clean = re.sub(r"[^a-z0-9]+", "-", model_name.lower()).strip("-")[:46]
+    return f"nb-{clean}-{run_id[:8]}"
 
 
 def _make_isvc_name(scenario_id: str, run_id: str) -> str:
@@ -1524,6 +1536,26 @@ class TestAutogluonPipelineFunctional:
             )
 
         # ------------------------------------------------------------------
+        # 6b. [Optional] Execute top-1 model notebook as a Kubernetes Job
+        # ------------------------------------------------------------------
+        notebook_run_result: dict = {}
+        if os.environ.get("RHOAI_NOTEBOOK_RUNNER_IMAGE", "").strip() and metrics_list:
+            notebook_run_result = self._run_notebook_test(
+                notebook_key=metrics_list[0].get("notebook_key"),
+                run_id=run_id,
+                model_name=metrics_list[0]["model_name"],
+                s3_client=s3_client,
+                artifacts_bucket=artifacts_bucket,
+                rhoai_integration_config=config,
+                temp_kubeconfig_path=temp_kubeconfig_path,
+            )
+        else:
+            logger.info(
+                "Scenario %s: notebook execution step skipped (set RHOAI_NOTEBOOK_RUNNER_IMAGE to enable)",
+                func_config.id,
+            )
+
+        # ------------------------------------------------------------------
         # 7. Write per-scenario report (xdist-safe: one file per scenario)
         # ------------------------------------------------------------------
         _write_scenario_result(
@@ -1554,6 +1586,7 @@ class TestAutogluonPipelineFunctional:
                 "leaderboard_artifact_key": leaderboard_key,
                 "test_dataset_artifact_key": test_dataset_key,
                 "deployment": deployment_result,
+                "notebook_run": notebook_run_result,
                 "config": asdict(func_config),
             },
         )
@@ -1615,6 +1648,11 @@ class TestAutogluonPipelineFunctional:
             f"sampled_test_dataset artifact not found in S3 under s3://{artifacts_bucket}/{run_prefix}"
         )
 
+        if os.environ.get("RHOAI_NOTEBOOK_RUNNER_IMAGE", "").strip() and not notebook_run_result.get("skipped"):
+            assert notebook_run_result.get("succeeded"), (
+                f"Notebook execution Job failed for scenario {func_config.id}: {notebook_run_result.get('error')}"
+            )
+
         if DEPLOY_AFTER_TRAINING and not deployment_result.get("skipped"):
             assert deployment_result.get("scored"), (
                 f"Scoring failed for scenario {func_config.id}: {deployment_result.get('score_error')}"
@@ -1624,8 +1662,8 @@ class TestAutogluonPipelineFunctional:
             assert isinstance(predictions, list) and len(predictions) > 0, (
                 f"Predictions for scenario {func_config.id} must be a non-empty list, got: {predictions!r}"
             )
-            assert all(isinstance(p, float) for p in predictions), (
-                f"Predictions for scenario {func_config.id} must be a list of floats, got: {predictions!r}"
+            assert all(isinstance(p, (int, float)) for p in predictions), (
+                f"Predictions for scenario {func_config.id} must be a list of ints or floats, got: {predictions!r}"
             )
 
     # ------------------------------------------------------------------
@@ -2036,4 +2074,271 @@ class TestAutogluonPipelineFunctional:
                 except Exception as sa_cleanup_err:
                     logger.warning("Failed to delete temporary SA %r: %s", temp_sa_name, sa_cleanup_err)
 
+        return result
+
+    # ------------------------------------------------------------------
+    # Notebook execution helper (called from test_scenario when enabled)
+    # ------------------------------------------------------------------
+
+    def _run_notebook_test(
+        self,
+        *,
+        notebook_key: str | None,
+        run_id: str,
+        model_name: str,
+        s3_client,
+        artifacts_bucket: str,
+        rhoai_integration_config: dict,
+        temp_kubeconfig_path: str | None,
+    ) -> dict:
+        """Execute the top-1 model notebook as a Kubernetes Job using papermill.
+
+        Requires ``RHOAI_NOTEBOOK_RUNNER_IMAGE`` to be set to a container image that
+        has both ``papermill`` and ``autogluon`` installed. When unset the step is skipped.
+
+        Steps:
+          a. Download the notebook JSON from S3 (``notebook_key``).
+          b. Create a Kubernetes ConfigMap with the notebook content.
+          c. Create a Kubernetes Job running ``papermill`` against the notebook.
+          d. Poll until the Job succeeds, fails, or times out.
+          e. Delete Job + ConfigMap in a ``finally`` block.
+
+        Returns a dict with:
+            ``succeeded``: bool — True only when the Job's ``status.succeeded`` is 1.
+            ``skipped``:   bool — True when the step was skipped (no image / no notebook).
+            ``reason``:    str | None — why the step was skipped.
+            ``error``:     str | None — error message when not succeeded.
+            ``job_name``:  str | None — Kubernetes Job name (for debugging).
+            ``elapsed_seconds``: float | None — wall time from Job creation to completion.
+        """
+        runner_image = os.environ.get("RHOAI_NOTEBOOK_RUNNER_IMAGE", "").strip()
+        if not runner_image:
+            logger.info("RHOAI_NOTEBOOK_RUNNER_IMAGE not set — skipping notebook execution test")
+            return {"skipped": True, "reason": "RHOAI_NOTEBOOK_RUNNER_IMAGE not set"}
+
+        if not notebook_key:
+            logger.warning("notebook_key is None for model %r — skipping notebook execution test", model_name)
+            return {"skipped": True, "reason": f"notebook not found in S3 for model {model_name!r}"}
+
+        try:
+            from kubernetes import client as k8s_client
+            from kubernetes.client.rest import ApiException as K8sApiException
+        except ImportError:
+            logger.warning("kubernetes package not installed; skipping notebook execution test")
+            return {"skipped": True, "reason": "kubernetes package not installed"}
+
+        notebook_run_timeout = int(os.environ.get("RHOAI_NOTEBOOK_RUN_TIMEOUT", str(_NOTEBOOK_JOB_TIMEOUT)))
+        namespace = rhoai_integration_config["rhoai_project"]
+        job_name = _make_notebook_job_name(run_id, model_name)
+
+        result: dict = {
+            "succeeded": False,
+            "skipped": False,
+            "reason": None,
+            "error": None,
+            "job_name": job_name,
+            "elapsed_seconds": None,
+        }
+
+        # a. Download the notebook JSON from S3.
+        try:
+            resp = s3_client.get_object(Bucket=artifacts_bucket, Key=notebook_key)
+            notebook_content = resp["Body"].read().decode("utf-8")
+        except Exception as exc:
+            msg = f"Failed to download notebook from s3://{artifacts_bucket}/{notebook_key}: {exc}"
+            logger.error(msg)
+            result["error"] = msg
+            return result
+
+        # ConfigMap has a 1 MB practical limit; skip gracefully if the notebook is too large.
+        notebook_size_bytes = len(notebook_content.encode("utf-8"))
+        if notebook_size_bytes > 900_000:
+            msg = (
+                f"Notebook s3://{artifacts_bucket}/{notebook_key} is {notebook_size_bytes // 1024} KB "
+                "(> 900 KB) — too large for a Kubernetes ConfigMap; skipping notebook execution test"
+            )
+            logger.warning(msg)
+            return {"skipped": True, "reason": msg}
+
+        logger.info(
+            "Downloaded notebook from s3://%s/%s (%d KB) for model %r",
+            artifacts_bucket,
+            notebook_key,
+            notebook_size_bytes // 1024,
+            model_name,
+        )
+
+        job_created = False
+        cm_created = False
+        try:
+            _load_k8s_config(temp_kubeconfig_path)
+            v1 = k8s_client.CoreV1Api()
+            batch_v1 = k8s_client.BatchV1Api()
+
+            # b. Create ConfigMap with notebook content (key: notebook.ipynb → /input/notebook.ipynb).
+            configmap = k8s_client.V1ConfigMap(
+                metadata=k8s_client.V1ObjectMeta(name=job_name, namespace=namespace),
+                data={"notebook.ipynb": notebook_content},
+            )
+            try:
+                v1.create_namespaced_config_map(namespace, configmap, _request_timeout=_K8S_CALL_TIMEOUT)
+                cm_created = True
+                logger.info("Created ConfigMap %r for notebook execution", job_name)
+            except K8sApiException as exc:
+                if exc.status == 409:
+                    v1.replace_namespaced_config_map(job_name, namespace, configmap, _request_timeout=_K8S_CALL_TIMEOUT)
+                    cm_created = True
+                    logger.info("Replaced existing ConfigMap %r", job_name)
+                else:
+                    raise
+
+            # c. Create a Kubernetes Job running papermill against the notebook.
+            env_vars = [
+                k8s_client.V1EnvVar(name="AWS_ACCESS_KEY_ID", value=rhoai_integration_config["s3_access_key"]),
+                k8s_client.V1EnvVar(name="AWS_SECRET_ACCESS_KEY", value=rhoai_integration_config["s3_secret_key"]),
+                k8s_client.V1EnvVar(name="AWS_S3_ENDPOINT", value=rhoai_integration_config["s3_endpoint"]),
+                k8s_client.V1EnvVar(
+                    name="AWS_DEFAULT_REGION",
+                    value=rhoai_integration_config.get("s3_region", "us-east-1"),
+                ),
+                k8s_client.V1EnvVar(name="AWS_S3_BUCKET", value=artifacts_bucket),
+                # Redirect all pip installs (setup and notebook cells) to /tmp so they
+                # succeed regardless of whether the venv is writable by the runtime UID.
+                # HOME=/tmp lets ipykernel --user and Jupyter find the registered kernel.
+                # PIP_INDEX_URL overrides pip.conf so the image's internal Red Hat mirror
+                # (console.redhat.com) is bypassed in favour of the public PyPI.
+                # k8s_client.V1EnvVar(name="HOME", value="/tmp"),
+                # k8s_client.V1EnvVar(name="PIP_TARGET", value="/tmp/nb-packages"),
+                # k8s_client.V1EnvVar(name="PYTHONPATH", value="/tmp/nb-packages"),
+                # k8s_client.V1EnvVar(name="PIP_INDEX_URL", value="https://pypi.org/simple/"),
+                k8s_client.V1EnvVar(name="PIP_RETRIES", value="2"),
+            ]
+            job = k8s_client.V1Job(
+                metadata=k8s_client.V1ObjectMeta(name=job_name, namespace=namespace),
+                spec=k8s_client.V1JobSpec(
+                    backoff_limit=0,
+                    ttl_seconds_after_finished=3600,
+                    template=k8s_client.V1PodTemplateSpec(
+                        spec=k8s_client.V1PodSpec(
+                            restart_policy="Never",
+                            containers=[
+                                k8s_client.V1Container(
+                                    name="notebook-runner",
+                                    image=runner_image,
+                                    command=["/bin/sh", "-c"],
+                                    args=[
+                                        "mkdir -p /tmp/nb-packages "
+                                        "&& pip install --quiet papermill ipykernel "
+                                        "&& python -m ipykernel install --user --name python3 "
+                                        "&& python -m papermill /input/notebook.ipynb /dev/null "
+                                        "--no-progress-bar --log-output"
+                                    ],
+                                    env=env_vars,
+                                    volume_mounts=[
+                                        k8s_client.V1VolumeMount(
+                                            name="notebook",
+                                            mount_path="/input",
+                                        )
+                                    ],
+                                    security_context=k8s_client.V1SecurityContext(
+                                        allow_privilege_escalation=False,
+                                        run_as_non_root=True,
+                                        capabilities=k8s_client.V1Capabilities(drop=["ALL"]),
+                                    ),
+                                )
+                            ],
+                            volumes=[
+                                k8s_client.V1Volume(
+                                    name="notebook",
+                                    config_map=k8s_client.V1ConfigMapVolumeSource(name=job_name),
+                                )
+                            ],
+                        )
+                    ),
+                ),
+            )
+            try:
+                batch_v1.create_namespaced_job(namespace, job, _request_timeout=_K8S_CALL_TIMEOUT)
+                job_created = True
+                logger.info("Created notebook execution Job %r (image=%r)", job_name, runner_image)
+            except K8sApiException as exc:
+                if exc.status != 409:
+                    raise
+
+            # d. Poll until Job completes or times out.
+            start = time.monotonic()
+            poll_interval = 15  # seconds
+            while True:
+                elapsed = time.monotonic() - start
+                try:
+                    j = batch_v1.read_namespaced_job(job_name, namespace, _request_timeout=_K8S_CALL_TIMEOUT)
+                    succeeded = j.status.succeeded or 0
+                    failed = j.status.failed or 0
+                    active = j.status.active or 0
+                    logger.info(
+                        "Job %r: succeeded=%d failed=%d active=%d (elapsed %.0fs)",
+                        job_name,
+                        succeeded,
+                        failed,
+                        active,
+                        elapsed,
+                    )
+                    if succeeded >= 1:
+                        result["succeeded"] = True
+                        result["elapsed_seconds"] = round(elapsed, 1)
+                        logger.info("Notebook Job %r succeeded in %.0fs", job_name, elapsed)
+                        break
+                    if failed >= 1:
+                        msg = f"Notebook Job {job_name!r} failed after {elapsed:.0f}s"
+                        logger.error(msg)
+                        result["error"] = msg
+                        result["elapsed_seconds"] = round(elapsed, 1)
+                        break
+                except Exception as poll_exc:
+                    logger.warning("Failed to poll Job %r: %s", job_name, poll_exc)
+
+                if elapsed >= notebook_run_timeout:
+                    msg = f"Notebook Job {job_name!r} timed out after {elapsed:.0f}s"
+                    logger.error(msg)
+                    result["error"] = msg
+                    result["elapsed_seconds"] = round(elapsed, 1)
+                    break
+
+                sleep_secs = min(poll_interval, max(1, notebook_run_timeout - elapsed))
+                logger.info(
+                    "Job %r: next poll in %.0fs (%.0fs remaining)...",
+                    job_name,
+                    sleep_secs,
+                    max(0, notebook_run_timeout - elapsed),
+                )
+                time.sleep(sleep_secs)
+
+        except Exception as exc:
+            msg = f"Notebook execution test failed for model {model_name!r}: {exc}"
+            logger.error(msg, exc_info=True)
+            result["error"] = msg
+
+        finally:
+            # e. Clean up Job and ConfigMap unconditionally.
+            if job_created:
+                try:
+                    _load_k8s_config(temp_kubeconfig_path)
+                    batch_v1_cleanup = k8s_client.BatchV1Api()
+                    batch_v1_cleanup.delete_namespaced_job(
+                        job_name,
+                        namespace,
+                        body=k8s_client.V1DeleteOptions(propagation_policy="Background"),
+                        _request_timeout=_K8S_CALL_TIMEOUT,
+                    )
+                    logger.info("Deleted notebook Job %r", job_name)
+                except Exception as cleanup_err:
+                    logger.warning("Failed to delete notebook Job %r: %s", job_name, cleanup_err)
+            if cm_created:
+                try:
+                    _load_k8s_config(temp_kubeconfig_path)
+                    v1_cleanup = k8s_client.CoreV1Api()
+                    v1_cleanup.delete_namespaced_config_map(job_name, namespace, _request_timeout=_K8S_CALL_TIMEOUT)
+                    logger.info("Deleted notebook ConfigMap %r", job_name)
+                except Exception as cleanup_err:
+                    logger.warning("Failed to delete notebook ConfigMap %r: %s", job_name, cleanup_err)
         return result

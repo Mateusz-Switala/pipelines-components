@@ -37,6 +37,8 @@
     ],
     "inference_sample": [
       {
+        "RowNumber": [1],
+        "CustomerId": [15634602],
         "CreditScore": [619],
         "Geography": ["France"],
         "Gender": ["Female"],
