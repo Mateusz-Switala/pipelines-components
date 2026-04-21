@@ -39,8 +39,9 @@ timestamp column. The test preprocesses these CSVs before uploading to S3:
    ```
 
 4. **Environment variables** — copy `.env.template` to `.env` in this directory
-   and fill in the values. All variables required by the integration tests
-   apply here as well:
+   and fill in the values.
+
+   **Core variables:**
 
    | Variable | Required | Description |
    |----------|----------|-------------|
@@ -66,6 +67,35 @@ timestamp column. The test preprocesses these CSVs before uploading to S3:
    | `AUTOML_FUNCTIONAL_TEST_REPORT` | no | Path to the JSON report output (default: `functional_test_report.json`) |
    | `AUTOML_FUNCTIONAL_TEST_KEEP_ARTIFACTS` | no | Set to `true` to skip deleting pipeline run artifacts from S3 after tests. Uploaded datasets are still cleaned up. |
 
+   **Post-pipeline notebook execution (optional):**
+
+   When `RHOAI_NOTEBOOK_RUNNER_IMAGE` is set, the test runs the top-1 model's predictor
+   notebook as a Kubernetes Job after each pipeline run and asserts it completes
+   successfully. The notebook installs `autogluon.timeseries` from the Red Hat PyPI
+   mirror at runtime.
+
+   | Variable | Required | Description |
+   |----------|----------|-------------|
+   | `RHOAI_NOTEBOOK_RUNNER_IMAGE` | no | Container image with `papermill` and `autogluon.timeseries` for notebook execution. When unset the step is skipped. |
+   | `RHOAI_NOTEBOOK_RUN_TIMEOUT` | no | Seconds to wait for the notebook Job to finish (default: `1200`) |
+
+   **Post-pipeline KServe deployment (optional):**
+
+   When `RHOAI_DEPLOY_AFTER_TRAINING=true`, the test deploys the top-1 model as a
+   KServe InferenceService and scores it using `inference_sample` from the config.
+
+   | Variable | Required | Description |
+   |----------|----------|-------------|
+   | `RHOAI_DEPLOY_AFTER_TRAINING` | no | Set to `true` to deploy and score the top-1 model (default: `false`) |
+   | `RHOAI_SERVING_IMAGE` | conditional | Container image for the AutoGluon ServingRuntime. Required when `RHOAI_CREATE_SERVING_RUNTIME=true`. |
+   | `RHOAI_CREATE_SERVING_RUNTIME` | no | Set to `true` to auto-create the ServingRuntime (requires `RHOAI_SERVING_IMAGE`) |
+   | `RHOAI_SERVING_RUNTIME_NAME` | no | Name of an existing ServingRuntime to use. When set, `RHOAI_CREATE_SERVING_RUNTIME` is ignored. |
+   | `RHOAI_KSERVE_STORAGE_KEY` | no | Name of an existing RHOAI Data Connection secret pointing to the artifacts bucket. Recommended over letting the test create a temporary secret. |
+   | `RHOAI_HARDWARE_PROFILE_NAME` | no | Hardware profile for the InferenceService (default: `default-profile`) |
+   | `RHOAI_HARDWARE_PROFILE_NAMESPACE` | no | Namespace where the hardware profile lives (default: `redhat-ods-applications`) |
+   | `RHOAI_HARDWARE_PROFILE_RESOURCE_VERSION` | no | Resource version of the hardware profile. Fetched automatically when unset. |
+   | `RHOAI_INFERENCE_TIMEOUT` | no | Seconds to wait for InferenceService to become ready (default: `300`) |
+
 5. **Test datasets** must be present under `tests/data/`:
    - `retail_sales_dataset.csv` — Retail sales time series
    - `traffic_dataset.csv` — Traffic flow time series
@@ -87,8 +117,8 @@ uv run pytest pipelines/training/automl/autogluon_timeseries_training_pipeline/t
     -m functional -v -s --log-cli-level=INFO \
     -k "TC-B-1_timeseries_retail_sales"
 
-# Use a custom config file
-AUTOML_FUNCTIONAL_TEST_CONFIG=/path/to/my_configs.json \
+# Use the short config for a faster smoke run
+AUTOML_FUNCTIONAL_TEST_CONFIG=functional_test_configs_short.json \
 uv run pytest pipelines/training/automl/autogluon_timeseries_training_pipeline/tests/test_pipeline_functional.py \
     -m functional -v -s --log-cli-level=INFO
 
@@ -111,9 +141,15 @@ uv run pytest pipelines/training/automl/autogluon_timeseries_training_pipeline/t
 5. Wait for the pipeline run to complete (up to `RHOAI_PIPELINE_RUN_TIMEOUT`).
 6. Measure wall-clock time for the run.
 7. Read `metrics.json` files from S3 artifacts for each refitted model.
-8. Measure total size of AutoGluon predictor artifacts in S3.
-9. Write the scenario result to a per-scenario JSON file (xdist-safe).
-10. Assert the run succeeded, completed in under 1 hour, and produced at least
+8. Validate the `sampled_test_dataset` artifact is present in S3.
+9. **Notebook execution** *(optional)*: if `RHOAI_NOTEBOOK_RUNNER_IMAGE` is set,
+   download the top-1 model's predictor notebook from S3, run it as a Kubernetes
+   Job using `papermill`, and assert the Job succeeds within `RHOAI_NOTEBOOK_RUN_TIMEOUT`.
+10. **KServe deployment** *(optional)*: if `RHOAI_DEPLOY_AFTER_TRAINING=true`,
+    deploy the top-1 model as a KServe InferenceService, score it with
+    `inference_sample`, and assert predictions are returned.
+11. Write the scenario result to a per-scenario JSON file (xdist-safe).
+12. Assert the run succeeded, completed in under 1 hour, and produced at least
     one model with metrics.
 
 After all scenarios finish, the per-scenario JSON files are merged into
@@ -161,14 +197,27 @@ set by `AUTOML_FUNCTIONAL_TEST_REPORT`). The top-level keys are scenario IDs:
         "model_name": "DeepAR_FULL",
         "metrics": {"MASE": 0.85, "MAPE": 0.12},
         "total_predictor_size_bytes": 1048576,
-        "total_predictor_size_mb": 1.0
+        "total_predictor_size_mb": 1.0,
+        "notebook_key": "autogluon-timeseries-training-pipeline/.../DeepAR_FULL/notebooks/automl_predictor_notebook.ipynb"
       }
     ],
+    "notebook_run": {
+      "succeeded": true,
+      "skipped": false,
+      "reason": null,
+      "error": null,
+      "job_name": "nb-deepar-full-abc123",
+      "elapsed_seconds": 320.1
+    },
+    "deployment": {},
     "config": { "..." }
   },
   "TC-B-2_timeseries_traffic": { "..." }
 }
 ```
+
+`notebook_run` is `{}` when `RHOAI_NOTEBOOK_RUNNER_IMAGE` is not set.
+`deployment` is `{}` when `RHOAI_DEPLOY_AFTER_TRAINING` is not set.
 
 ## Config File Format
 
@@ -187,7 +236,14 @@ The config file is a JSON array. Each entry:
   "train_data_file_key": "functional-test/timeseries/retail_sales.csv",
   "tags": ["timeseries", "retail"],
   "add_dummy_item_id": false,
-  "add_dummy_timestamp": false
+  "add_dummy_timestamp": false,
+  "inference_sample": [
+    {
+      "item_id": ["ts_0", "ts_0", "ts_0"],
+      "timestamp": ["2020-01-01", "2020-01-02", "2020-01-03"],
+      "Total Amount": [100.0, 120.0, null]
+    }
+  ]
 }
 ```
 
@@ -205,6 +261,7 @@ The config file is a JSON array. Each entry:
 | `tags` | list[str] | Optional tags for documentation/filtering |
 | `add_dummy_item_id` | boolean | If true, add a constant `item_id` column before uploading |
 | `add_dummy_timestamp` | boolean | If true, add sequential daily dates as a `timestamp` column |
+| `inference_sample` | list[dict] | Column-oriented historical rows used for KServe scoring when `RHOAI_DEPLOY_AFTER_TRAINING=true`. Provide at least `prediction_length` rows of history per `item_id`; target values for future steps should be `null`. |
 
 ## Registering the `functional` Marker
 
