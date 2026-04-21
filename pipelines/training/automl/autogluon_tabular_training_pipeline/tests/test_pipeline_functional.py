@@ -159,9 +159,12 @@ FUNCTIONAL_CONFIGS = _load_functional_configs(_config_path_env)
 
 
 def _session_rhoai_integration_config():
-    from integration_config import RHOAI_INTEGRATION_CONFIG
+    import importlib.util
 
-    return RHOAI_INTEGRATION_CONFIG
+    spec = importlib.util.spec_from_file_location("integration_config", _TESTS_DIR / "integration_config.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.RHOAI_INTEGRATION_CONFIG
 
 
 RHOAI_INTEGRATION_CONFIG = _session_rhoai_integration_config()
