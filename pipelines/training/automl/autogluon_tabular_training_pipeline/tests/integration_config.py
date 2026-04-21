@@ -37,6 +37,24 @@ S3_BUCKET_DATA_ENV = "RHOAI_TEST_DATA_BUCKET"
 S3_BUCKET_ARTIFACTS_ENV = "RHOAI_TEST_ARTIFACTS_BUCKET"
 S3_SECRET_NAME_ENV = "RHOAI_TEST_S3_SECRET_NAME"
 
+# Optional: deploy the top-1 model via KServe after pipeline completes (default: false)
+RHOAI_DEPLOY_AFTER_TRAINING_ENV = "RHOAI_DEPLOY_AFTER_TRAINING"
+# Container image for the AutoGluon ServingRuntime (required when RHOAI_CREATE_SERVING_RUNTIME=true)
+RHOAI_SERVING_IMAGE_ENV = "RHOAI_SERVING_IMAGE"
+# ServingRuntime resource name to use (default: kserve-autogluonserver)
+RHOAI_SERVING_RUNTIME_NAME_ENV = "RHOAI_SERVING_RUNTIME_NAME"
+# Set to "true"/"1" to auto-create the ServingRuntime if it does not exist (requires RHOAI_SERVING_IMAGE)
+RHOAI_CREATE_SERVING_RUNTIME_ENV = "RHOAI_CREATE_SERVING_RUNTIME"
+# Seconds to wait for the InferenceService to become ready (default: 300)
+RHOAI_INFERENCE_TIMEOUT_ENV = "RHOAI_INFERENCE_TIMEOUT"
+# Name of an existing RHOAI Data Connection secret to use as KServe storage key.
+# When set, no temporary S3 secret is created. Falls back to auto-creating a secret if unset.
+RHOAI_KSERVE_STORAGE_KEY_ENV = "RHOAI_KSERVE_STORAGE_KEY"
+# Optional: name of the ConfigMap containing the CA bundle for the KServe storage initializer.
+# Required when the S3 endpoint uses a custom/self-signed TLS certificate (e.g. MinIO on OpenShift).
+# Example: odh-kserve-custom-ca-bundle
+RHOAI_KSERVE_CA_BUNDLE_CONFIGMAP_ENV = "RHOAI_KSERVE_CA_BUNDLE_CONFIGMAP"
+
 # Optional: create DataSciencePipelinesApplication CR in the test namespace (default: false)
 # Set to "true" or "1" to create a DSPA instance via Kubernetes CustomObjectsApi.
 RHOAI_CREATE_DSPA_ENV = "RHOAI_CREATE_DSPA"
@@ -87,6 +105,7 @@ def get_rhoai_config():
         "s3_bucket_data": bucket_data,
         "s3_bucket_artifacts": bucket_artifacts or bucket_data,
         "s3_secret_name": secret_name,
+        "kserve_ca_bundle_configmap": os.environ.get(RHOAI_KSERVE_CA_BUNDLE_CONFIGMAP_ENV, ""),
     }
 
 

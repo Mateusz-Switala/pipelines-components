@@ -11,7 +11,20 @@
     "train_data_file_key": "functional-test/timeseries/traffic.csv",
     "tags": ["timeseries", "traffic"],
     "add_dummy_item_id": true,
-    "add_dummy_timestamp": true
+    "add_dummy_timestamp": true,
+    "inference_sample": [
+      {
+        "item_id":        ["ts_0", "ts_0", "ts_0", "ts_0", "ts_0", "ts_0", "ts_0", "ts_0", "ts_0", "ts_0", "ts_0", "ts_0", "ts_0", "ts_0", "ts_0", "ts_0", "ts_0", "ts_0", "ts_0", "ts_0", "ts_0", "ts_0", "ts_0", "ts_0"],
+        "timestamp":      ["2020-01-01", "2020-01-02", "2020-01-03", "2020-01-04", "2020-01-05", "2020-01-06", "2020-01-07", "2020-01-08", "2020-01-09", "2020-01-10", "2020-01-11", "2020-01-12", "2020-01-13", "2020-01-14", "2020-01-15", "2020-01-16", "2020-01-17", "2020-01-18", "2020-01-19", "2020-01-20", "2020-01-21", "2020-01-22", "2020-01-23", "2020-01-24"],
+        "Unnamed: 2":     [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, null, null, null, null, null, null, null, null, null, null, null, null, null, null],
+        "vehicle_count":  [54, 75, 95, 87, 38, 36, 96, 87, 69, 110, null, null, null, null, null, null, null, null, null, null, null, null, null, null],
+        "average_speed":  [10.22, 63.64, 37.38, 59.81, 48.43, 62.28, 49.78, 25.05, 17.81, 23.07, 45.3, 38.7, 52.1, 41.8, 49.6, 33.4, 57.2, 44.9, 28.6, 61.3, 36.8, 53.5, 42.0, 47.1],
+        "lane_occupancy": [59.92, 87.63, 0.77, 75.96, 43.53, 12.41, 58.25, 53.26, 84.23, 52.16, 58.4, 63.2, 47.9, 71.5, 55.0, 39.7, 68.3, 44.6, 77.1, 51.8, 62.5, 35.9, 73.4, 48.2],
+        "flow_rate":      [1467, 1098, 1411, 892, 949, 1223, 712, 779, 714, 831, null, null, null, null, null, null, null, null, null, null, null, null, null, null],
+        "time_of_day":    ["evening", "afternoon", "night", "evening", "night", "evening", "morning", "morning", "evening", "evening", null, null, null, null, null, null, null, null, null, null, null, null, null, null],
+        "waiting_time":   [12.52, 44.83, 80.44, 11.26, 18.14, 2.75, 10.48, 23.71, 5.96, 23.10, null, null, null, null, null, null, null, null, null, null, null, null, null, null]
+      }
+    ]
   },
   {
     "id": "TC-B-3_timeseries_electricity",
@@ -25,6 +38,13 @@
     "train_data_file_key": "functional-test/timeseries/electricity.csv",
     "tags": ["timeseries", "electricity"],
     "add_dummy_item_id": true,
-    "add_dummy_timestamp": false
+    "add_dummy_timestamp": false,
+    "inference_sample": [
+      {
+        "item_id":    ["ts_0", "ts_0", "ts_0", "ts_0", "ts_0", "ts_0", "ts_0", "ts_0", "ts_0", "ts_0", "ts_0", "ts_0", "ts_0", "ts_0", "ts_0", "ts_0", "ts_0"],
+        "datetime":   ["2021-01-01 00:00:00", "2021-01-01 01:00:00", "2021-01-01 02:00:00", "2021-01-01 03:00:00", "2021-01-01 04:00:00", "2021-01-01 05:00:00", "2021-01-01 06:00:00", "2021-01-01 07:00:00", "2021-01-01 08:00:00", "2021-01-01 09:00:00", "2021-01-01 10:00:00", "2021-01-01 11:00:00", "2021-01-01 12:00:00", "2021-01-01 13:00:00", "2021-01-01 14:00:00", "2021-01-01 15:00:00", "2021-01-01 16:00:00"],
+        "nat_demand": [10543.2, 10218.7, 9874.5, 9612.3, 9401.8, 9285.4, 9534.6, 10102.9, 10876.3, 11234.7, null, null, null, null, null, null, null]
+      }
+    ]
   }
 ]

@@ -11,6 +11,13 @@ Environment variables (on top of the standard integration .env):
     AUTOML_FUNCTIONAL_TEST_REPORT  — path to the JSON report output
                               (default: functional_test_report.json in this dir)
 
+Deployment test environment variables (optional, only when RHOAI_DEPLOY_AFTER_TRAINING=true):
+    RHOAI_DEPLOY_AFTER_TRAINING    — set to "true"/"1" to run KServe deployment after pipeline
+    RHOAI_SERVING_IMAGE            — container image for AutoGluon ServingRuntime (required when
+                                     RHOAI_CREATE_SERVING_RUNTIME=true)
+    RHOAI_CREATE_SERVING_RUNTIME   — set to "true"/"1" to create the ServingRuntime if missing
+    RHOAI_INFERENCE_TIMEOUT        — seconds to wait for InferenceService ready (default: 300)
+
 Parallel execution:
     Use pytest-xdist to run scenarios concurrently by passing ``-n <workers>``
     to pytest (e.g. ``-n 3``).
@@ -24,8 +31,9 @@ The test flow for each scenario:
     6. Measure wall-clock time for the run
     7. Read metrics for top_n models from the S3 artifacts
     8. Measure the total size of resulting model artifacts in S3
-    9. Write the scenario result to a per-scenario JSON file
-   10. Assert that the run completed in under 1 hour
+    9. [Optional] Deploy top-1 model via KServe and validate readiness / scoring
+   10. Write the scenario result to a per-scenario JSON file
+   11. Assert that the run completed in under 1 hour
 
 After all scenarios finish, session-scoped teardown removes:
     - Uploaded datasets from S3
@@ -41,8 +49,12 @@ import csv
 import json
 import logging
 import os
+import re
 import secrets
+import ssl
 import time
+import urllib.error
+import urllib.request
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from io import StringIO
@@ -61,6 +73,19 @@ _TESTS_DIR = Path(__file__).resolve().parent
 _DEFAULT_CONFIG_PATH = _TESTS_DIR / "functional_test_configs.json"
 _REPORT_PARTS_DIR = _TESTS_DIR / ".report_parts"
 MAX_RUN_DURATION_SECONDS = 3600  # 1 hour hard limit
+
+# KServe API constants
+_KSERVE_GROUP = "serving.kserve.io"
+_KSERVE_ISVC_VERSION = "v1beta1"
+_KSERVE_SR_VERSION = "v1alpha1"
+_KSERVE_ISVC_PLURAL = "inferenceservices"
+_KSERVE_SR_PLURAL = "servingruntimes"
+
+# Timeout for each Kubernetes client call (avoids indefinite hang on unreachable API).
+_K8S_CALL_TIMEOUT = 30  # seconds
+# HardwareProfile GET can fail briefly after RBAC / operator startup; retry before giving up.
+_HW_PROFILE_FETCH_ATTEMPTS = 6
+_HW_PROFILE_FETCH_DELAY_SECONDS = 3.0
 
 from ..pipeline import autogluon_timeseries_training_pipeline  # noqa: E402
 
@@ -88,6 +113,9 @@ class FunctionalTestConfig:
     add_dummy_item_id: bool = False
     add_dummy_timestamp: bool = False
     tags: list[str] = field(default_factory=list)
+    # Column-oriented sample for post-training inference scoring:
+    # [{col: [val, ...], ...}] — converted to row-oriented instances before sending.
+    inference_sample: list[dict] | None = None
 
     def get_pipeline_arguments(
         self,
@@ -127,6 +155,7 @@ def _load_functional_configs(config_path: str | Path | None = None) -> list[Func
                 add_dummy_item_id=item.get("add_dummy_item_id", False),
                 add_dummy_timestamp=item.get("add_dummy_timestamp", False),
                 tags=item.get("tags", []),
+                inference_sample=item.get("inference_sample"),
             )
         )
     return configs
@@ -152,6 +181,13 @@ def _session_rhoai_integration_config():
 
 
 RHOAI_INTEGRATION_CONFIG = _session_rhoai_integration_config()
+
+# Read deployment flags after dotenv is loaded by _session_rhoai_integration_config().
+DEPLOY_AFTER_TRAINING: bool = os.environ.get("RHOAI_DEPLOY_AFTER_TRAINING", "").strip().lower() in (
+    "1",
+    "true",
+    "yes",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -210,7 +246,7 @@ def _preprocess_csv(
 def _make_run_name() -> str:
     hex_part = secrets.token_hex(3)
     time_part = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-    return f"ts-functional-{hex_part}-{time_part}"
+    return f"automl-ts-functional-{hex_part}-{time_part}"
 
 
 def _run_succeeded(detail) -> bool:
@@ -292,6 +328,713 @@ def _delete_s3_objects(s3_client, bucket: str, keys: list[str]) -> int:
         except Exception as e:
             logger.warning("Failed to delete %d objects from s3://%s: %s", len(batch), bucket, e)
     return deleted
+
+
+# ---------------------------------------------------------------------------
+# KServe deployment helpers
+# ---------------------------------------------------------------------------
+
+
+def _find_top_model_predictor_prefix(s3_client, bucket: str, run_prefix: str, model_name: str) -> str | None:
+    """Find the S3 prefix (no trailing slash) for a model's predictor directory."""
+    objects = _list_s3_objects(s3_client, bucket, run_prefix)
+    needle = f"/{model_name}/predictor/"
+    for obj in objects:
+        key = obj["Key"]
+        idx = key.find(needle)
+        if idx != -1:
+            return key[: idx + len(needle) - 1]
+    return None
+
+
+def _make_isvc_name(scenario_id: str, run_id: str) -> str:
+    """Return a valid Kubernetes name for an InferenceService (≤36 chars, DNS label safe).
+
+    The name is capped at 36 characters because odh-model-controller generates a
+    kube-rbac-proxy ConfigMap/volume named ``{isvc_name}-kube-rbac-proxy-sar-config``
+    (27-char suffix).  Kubernetes volume names must be ≤ 63 characters, so:
+        36 (isvc_name) + 27 (suffix) = 63  ← exactly at the limit.
+
+    Layout: ``automl-`` (7) + clean (≤20) + ``-`` (1) + run_id[:8] (8) = ≤ 36.
+    """
+    clean = re.sub(r"[^a-z0-9]+", "-", scenario_id.lower()).strip("-")[:20]
+    return f"automl-{clean}-{run_id[:8]}"
+
+
+def _load_k8s_config(kubeconfig_path: str | None) -> None:
+    """Load kubernetes config from file or fall back to in-cluster config."""
+    from kubernetes import config
+
+    try:
+        if kubeconfig_path:
+            config.load_kube_config(config_file=kubeconfig_path)
+        else:
+            config.load_kube_config()
+    except Exception:
+        config.load_incluster_config()
+
+
+def _create_kserve_s3_secret(v1, namespace: str, secret_name: str, bucket: str, integration_config: dict) -> None:
+    """Create (or replace) an RHOAI Data Connection secret for KServe storage initializer.
+
+    The secret includes the ``opendatahub.io/managed: "true"`` label so that
+    odh-model-controller recognises it as a Data Connection and wires it up as the
+    storage key for the InferenceService predictor.
+    """
+    from kubernetes import client
+    from kubernetes.client.rest import ApiException
+
+    endpoint = integration_config["s3_endpoint"]
+
+    # Use the exact secret data keys and metadata that the RHOAI Dashboard writes
+    # when creating an S3 Data Connection (matched against a known working secret).
+    # Keys: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_S3_ENDPOINT, AWS_S3_BUCKET.
+    # Labels: opendatahub.io/managed + opendatahub.io/dashboard (no connection-type label).
+    # Annotations: connection-type, connection-type-protocol, connection-type-ref,
+    #              and openshift.io/display-name.
+    secret = client.V1Secret(
+        metadata=client.V1ObjectMeta(
+            name=secret_name,
+            namespace=namespace,
+            labels={
+                "opendatahub.io/managed": "true",
+                "opendatahub.io/dashboard": "true",
+            },
+            annotations={
+                "opendatahub.io/connection-type": "s3",
+                "opendatahub.io/connection-type-protocol": "s3",
+                "opendatahub.io/connection-type-ref": "s3",
+                "openshift.io/display-name": secret_name,
+            },
+        ),
+        type="Opaque",
+        string_data={
+            "AWS_ACCESS_KEY_ID": integration_config["s3_access_key"],
+            "AWS_SECRET_ACCESS_KEY": integration_config["s3_secret_key"],
+            "AWS_S3_ENDPOINT": endpoint,
+            "AWS_S3_BUCKET": bucket,
+        },
+    )
+    try:
+        v1.create_namespaced_secret(namespace, secret, _request_timeout=_K8S_CALL_TIMEOUT)
+    except ApiException as e:
+        if e.status == 409:
+            v1.replace_namespaced_secret(secret_name, namespace, secret, _request_timeout=_K8S_CALL_TIMEOUT)
+        else:
+            raise
+
+
+def _create_connection_sa(v1, namespace: str, secret_name: str) -> str:
+    """Create the companion ServiceAccount required by odh-model-controller for a Data Connection.
+
+    When the RHOAI Dashboard registers a Data Connection it creates a ServiceAccount
+    named ``{secret_name}-sa`` alongside the secret.  odh-model-controller checks for
+    this SA before setting ``storage.key`` / ``serviceAccountName`` on an ISVC.
+    For temporary test secrets we must create the SA ourselves so the controller
+    can proceed with its normal reconcile loop.
+
+    Returns:
+        The ServiceAccount name (``{secret_name}-sa``).
+    """
+    from kubernetes import client as k8s_client
+    from kubernetes.client.rest import ApiException
+
+    sa_name = f"{secret_name}-sa"
+    sa = k8s_client.V1ServiceAccount(
+        metadata=k8s_client.V1ObjectMeta(
+            name=sa_name,
+            namespace=namespace,
+            # No opendatahub.io labels: Dashboard-created companion SAs have none
+            # (confirmed from cluster inspection of real working deployments).
+            # The controller looks up the SA by name, not via label-filtered informer.
+        ),
+        # List the Data Connection secret in the SA's secrets field, exactly as
+        # the RHOAI Dashboard does when registering a Data Connection.
+        secrets=[k8s_client.V1ObjectReference(name=secret_name)],
+    )
+    try:
+        v1.create_namespaced_service_account(namespace, sa, _request_timeout=_K8S_CALL_TIMEOUT)
+        logger.info("Created ServiceAccount %r in namespace %r (secrets=[%r])", sa_name, namespace, secret_name)
+    except ApiException as exc:
+        if exc.status == 409:
+            logger.info("ServiceAccount %r already exists — reusing", sa_name)
+        else:
+            raise
+    return sa_name
+
+
+def _create_connection_rbac(rbac_v1, namespace: str, sa_name: str, secret_name: str) -> str:
+    """Create a Role + RoleBinding so the SA can GET the Data Connection secret.
+
+    The KServe agent sidecar authenticates to the Kubernetes API using the pod's
+    mounted SA token to read the credentials secret.  Without this RBAC the agent
+    receives a 403 Forbidden, skips downloading, and the kserve-container crashes
+    with 'predictor.pkl not found'.
+
+    The RHOAI Dashboard creates equivalent RBAC when registering a Data Connection;
+    we replicate it here for temporary test secrets.
+
+    Returns:
+        The RoleBinding name (same as ``sa_name`` for simplicity).
+    """
+    from kubernetes import client as k8s_client
+    from kubernetes.client.rest import ApiException
+
+    role_name = sa_name
+    role = k8s_client.V1Role(
+        metadata=k8s_client.V1ObjectMeta(
+            name=role_name,
+            namespace=namespace,
+            labels={
+                "opendatahub.io/managed": "true",
+                "opendatahub.io/dashboard": "true",
+            },
+        ),
+        rules=[
+            k8s_client.V1PolicyRule(
+                api_groups=[""],
+                resources=["secrets"],
+                verbs=["get"],
+                resource_names=[secret_name],
+            )
+        ],
+    )
+    try:
+        rbac_v1.create_namespaced_role(namespace, role, _request_timeout=_K8S_CALL_TIMEOUT)
+        logger.info("Created Role %r in namespace %r", role_name, namespace)
+    except ApiException as exc:
+        if exc.status == 409:
+            logger.info("Role %r already exists — reusing", role_name)
+        else:
+            raise
+
+    rb_name = sa_name
+    role_binding = k8s_client.V1RoleBinding(
+        metadata=k8s_client.V1ObjectMeta(
+            name=rb_name,
+            namespace=namespace,
+            labels={
+                "opendatahub.io/managed": "true",
+                "opendatahub.io/dashboard": "true",
+            },
+        ),
+        subjects=[
+            k8s_client.RbacV1Subject(
+                kind="ServiceAccount",
+                name=sa_name,
+                namespace=namespace,
+            )
+        ],
+        role_ref=k8s_client.V1RoleRef(
+            api_group="rbac.authorization.k8s.io",
+            kind="Role",
+            name=role_name,
+        ),
+    )
+    try:
+        rbac_v1.create_namespaced_role_binding(namespace, role_binding, _request_timeout=_K8S_CALL_TIMEOUT)
+        logger.info("Created RoleBinding %r in namespace %r", rb_name, namespace)
+    except ApiException as exc:
+        if exc.status == 409:
+            logger.info("RoleBinding %r already exists — reusing", rb_name)
+        else:
+            raise
+
+    return rb_name
+
+
+def _ensure_serving_runtime(co, namespace: str, runtime_name: str, serving_image: str) -> bool:
+    """Create the AutoGluon ServingRuntime if it does not exist in the namespace.
+
+    Returns True if newly created, False if already existed.
+    """
+    from kubernetes.client.rest import ApiException
+
+    try:
+        co.get_namespaced_custom_object(
+            group=_KSERVE_GROUP,
+            version=_KSERVE_SR_VERSION,
+            namespace=namespace,
+            plural=_KSERVE_SR_PLURAL,
+            name=runtime_name,
+            _request_timeout=_K8S_CALL_TIMEOUT,
+        )
+        logger.info("ServingRuntime %r already exists in %r — skipping creation", runtime_name, namespace)
+        return False
+    except ApiException as e:
+        if e.status != 404:
+            raise
+
+    sr_annotations = {
+        "opendatahub.io/apiProtocol": "REST",
+        "opendatahub.io/serving-runtime-scope": "global",
+        "opendatahub.io/template-display-name": "AutoGluon ServingRuntime for KServe",
+        "openshift.io/display-name": "AutoGluon ServingRuntime for KServe",
+    }
+
+    runtime = {
+        "apiVersion": f"{_KSERVE_GROUP}/{_KSERVE_SR_VERSION}",
+        "kind": "ServingRuntime",
+        "metadata": {
+            "name": runtime_name,
+            "namespace": namespace,
+            "annotations": sr_annotations,
+        },
+        "spec": {
+            "annotations": {
+                "prometheus.kserve.io/path": "/metrics",
+                "prometheus.kserve.io/port": "8080",
+            },
+            "supportedModelFormats": [{"name": "autogluon", "version": "1"}],
+            "protocolVersions": ["v1", "v2"],
+            "containers": [
+                {
+                    "name": "kserve-container",
+                    "image": serving_image,
+                    "args": [
+                        "--model_name={{.Name}}",
+                        "--model_dir=/mnt/models",
+                        "--http_port=8080",
+                    ],
+                    "securityContext": {
+                        "allowPrivilegeEscalation": False,
+                        "privileged": False,
+                        "runAsNonRoot": True,
+                        "capabilities": {"drop": ["ALL"]},
+                    },
+                    "resources": {
+                        "requests": {"cpu": "1", "memory": "2Gi"},
+                        "limits": {"cpu": "1", "memory": "2Gi"},
+                    },
+                }
+            ],
+        },
+    }
+    co.create_namespaced_custom_object(
+        group=_KSERVE_GROUP,
+        version=_KSERVE_SR_VERSION,
+        namespace=namespace,
+        plural=_KSERVE_SR_PLURAL,
+        body=runtime,
+        _request_timeout=_K8S_CALL_TIMEOUT,
+    )
+    logger.info("Created ServingRuntime %r in %r", runtime_name, namespace)
+    return True
+
+
+def _create_inference_service(
+    co,
+    namespace: str,
+    isvc_name: str,
+    runtime_name: str,
+    storage_path: str,
+    storage_key: str,
+    hardware_profile_name: str = "default-profile",
+    hardware_profile_namespace: str = "redhat-ods-applications",
+    hardware_profile_resource_version: str = "",
+) -> None:
+    """Create a KServe InferenceService in RawDeployment mode with an external Route."""
+    from kubernetes.client.rest import ApiException
+
+    annotations = {
+        "serving.kserve.io/stop": "false",
+        "serving.kserve.io/deploymentMode": "RawDeployment",
+        "security.opendatahub.io/enable-auth": "true",
+        "openshift.io/display-name": isvc_name,
+        "openshift.io/description": "",
+        "opendatahub.io/connections": storage_key,
+        "opendatahub.io/connection-path": storage_path,
+        "opendatahub.io/model-type": "predictive",
+        "opendatahub.io/hardware-profile-name": hardware_profile_name,
+        "opendatahub.io/hardware-profile-namespace": hardware_profile_namespace,
+    }
+    if hardware_profile_resource_version:
+        annotations["opendatahub.io/hardware-profile-resource-version"] = hardware_profile_resource_version
+
+    isvc = {
+        "apiVersion": f"{_KSERVE_GROUP}/{_KSERVE_ISVC_VERSION}",
+        "kind": "InferenceService",
+        "metadata": {
+            "name": isvc_name,
+            "namespace": namespace,
+            "labels": {
+                "networking.kserve.io/visibility": "exposed",
+                "opendatahub.io/dashboard": "true",
+            },
+            "annotations": annotations,
+        },
+        "spec": {
+            "predictor": {
+                "deploymentStrategy": {"type": "RollingUpdate"},
+                "maxReplicas": 1,
+                "minReplicas": 1,
+                "model": {
+                    "modelFormat": {"name": "autogluon", "version": "1"},
+                    "name": "",
+                    "runtime": runtime_name,
+                    "resources": {
+                        "requests": {"cpu": "2", "memory": "4Gi"},
+                        "limits": {"cpu": "2", "memory": "4Gi"},
+                    },
+                },
+            }
+        },
+    }
+    try:
+        co.create_namespaced_custom_object(
+            group=_KSERVE_GROUP,
+            version=_KSERVE_ISVC_VERSION,
+            namespace=namespace,
+            plural=_KSERVE_ISVC_PLURAL,
+            body=isvc,
+            _request_timeout=_K8S_CALL_TIMEOUT,
+        )
+    except ApiException as e:
+        if e.status != 409:
+            raise
+
+
+def _wait_for_isvc_ready(
+    co,
+    namespace: str,
+    isvc_name: str,
+    timeout_seconds: int = 300,
+    poll_interval: int = 30,
+) -> tuple[bool, str | None]:
+    """Poll an InferenceService until Ready=True, a terminal failure appears, or timeout.
+
+    At each poll logs ``spec.predictor.model.storage.key`` and
+    ``spec.predictor.serviceAccountName`` (set by odh-model-controller) and all
+    status conditions with reason/message so blocking errors surface immediately.
+
+    Returns ``(is_ready, blocking_reason)``.
+    """
+    from kubernetes.client.rest import ApiException
+
+    _BLOCKING_REASONS = frozenset(
+        {
+            "ServingRuntimeNotFound",
+            "NoSupportedRuntime",
+            "InvalidStorageSpec",
+            "RuntimeNotRecognized",
+            "UnsupportedProtocol",
+        }
+    )
+
+    start = time.monotonic()
+    last_cond_fingerprint: frozenset = frozenset()
+
+    while True:
+        elapsed = time.monotonic() - start
+        try:
+            isvc = co.get_namespaced_custom_object(
+                group=_KSERVE_GROUP,
+                version=_KSERVE_ISVC_VERSION,
+                namespace=namespace,
+                plural=_KSERVE_ISVC_PLURAL,
+                name=isvc_name,
+                _request_timeout=_K8S_CALL_TIMEOUT,
+            )
+        except ApiException as exc:
+            logger.warning("ISVC %r: GET failed (elapsed %.0fs, HTTP %s)", isvc_name, elapsed, exc.status)
+        except Exception as exc:
+            logger.warning("ISVC %r: GET failed (elapsed %.0fs): %s", isvc_name, elapsed, exc)
+        else:
+            status = isvc.get("status") or {}
+            spec = isvc.get("spec") or {}
+            conditions = status.get("conditions") or []
+
+            predictor = spec.get("predictor") or {}
+            model = predictor.get("model") or {}
+            storage = model.get("storage") or {}
+            logger.info(
+                "ISVC %r (elapsed %.0fs): storage.key=%r  serviceAccountName=%r  servingRuntime=%r  deploymentMode=%r",
+                isvc_name,
+                elapsed,
+                storage.get("key") or "(not set)",
+                predictor.get("serviceAccountName") or "(not set)",
+                status.get("servingRuntimeName", ""),
+                status.get("deploymentMode", ""),
+            )
+
+            cond_fingerprint = frozenset((c.get("type"), c.get("status"), c.get("reason", "")) for c in conditions)
+            if cond_fingerprint != last_cond_fingerprint:
+                if conditions:
+                    for cond in conditions:
+                        ctype = cond.get("type", "?")
+                        cstatus = cond.get("status", "?")
+                        reason = cond.get("reason", "")
+                        message = cond.get("message", "")
+                        detail = f" | reason={reason}" if reason else ""
+                        detail += f" | message={message!r}" if message else ""
+                        logger.info("ISVC %r condition %s=%s%s", isvc_name, ctype, cstatus, detail)
+                else:
+                    logger.info(
+                        "ISVC %r: no status conditions yet (elapsed %.0fs)",
+                        isvc_name,
+                        elapsed,
+                    )
+                last_cond_fingerprint = cond_fingerprint
+
+            for cond in conditions:
+                if cond.get("status") == "False":
+                    reason = cond.get("reason", "")
+                    if reason in _BLOCKING_REASONS:
+                        blocking = f"{cond.get('type')}=False reason={reason}: {cond.get('message', '')}"
+                        logger.error(
+                            "ISVC %r: terminal failure after %.0fs — %s",
+                            isvc_name,
+                            elapsed,
+                            blocking,
+                        )
+                        return False, blocking
+
+            cond_map = {c.get("type"): c.get("status") for c in conditions}
+            if cond_map.get("Ready") == "True":
+                logger.info("ISVC %r: Ready=True after %.0fs", isvc_name, elapsed)
+                return True, None
+
+        if elapsed >= timeout_seconds:
+            logger.warning("ISVC %r: timed out after %.0fs without Ready=True", isvc_name, elapsed)
+            return False, None
+
+        sleep_secs = min(poll_interval, timeout_seconds - elapsed)
+        logger.info(
+            "ISVC %r: not yet Ready — next poll in %.0fs (%.0fs remaining)...",
+            isvc_name,
+            sleep_secs,
+            timeout_seconds - elapsed,
+        )
+        time.sleep(sleep_secs)
+
+
+def _resolve_isvc_external_url(co, namespace: str, isvc_name: str) -> str | None:
+    """Return the external HTTPS URL for an InferenceService (single attempt, no polling).
+
+    Primary: reads ``status.url`` from the ISVC itself.
+    Fallback: scans OpenShift Routes for ``{isvc_name}`` or ``{isvc_name}-predictor``.
+    """
+    from kubernetes.client.rest import ApiException
+
+    try:
+        isvc = co.get_namespaced_custom_object(
+            group=_KSERVE_GROUP,
+            version=_KSERVE_ISVC_VERSION,
+            namespace=namespace,
+            plural=_KSERVE_ISVC_PLURAL,
+            name=isvc_name,
+            _request_timeout=_K8S_CALL_TIMEOUT,
+        )
+        status_url = (isvc.get("status") or {}).get("url", "")
+        if status_url.startswith("https://") and ".svc.cluster.local" not in status_url:
+            logger.info("Resolved external URL from ISVC status.url: %s", status_url)
+            return status_url
+    except ApiException:
+        pass
+
+    def _extract_host(route: dict) -> str | None:
+        host = (route.get("spec") or {}).get("host")
+        if not host:
+            ingress = (route.get("status") or {}).get("ingress") or []
+            host = ingress[0].get("host") if ingress else None
+        return host
+
+    for route_name in (isvc_name, f"{isvc_name}-predictor"):
+        try:
+            route = co.get_namespaced_custom_object(
+                group="route.openshift.io",
+                version="v1",
+                namespace=namespace,
+                plural="routes",
+                name=route_name,
+                _request_timeout=_K8S_CALL_TIMEOUT,
+            )
+            host = _extract_host(route)
+            if host:
+                logger.info("Resolved external URL from Route %r: https://%s", route_name, host)
+                return f"https://{host}"
+        except ApiException as exc:
+            if exc.status != 404:
+                logger.debug("Route lookup %r: HTTP %s", route_name, exc.status)
+
+    return None
+
+
+def _column_sample_to_instances(sample: list[dict]) -> list[dict]:
+    """Convert column-oriented [{col: [val, ...]}] to per-row scalar instance dicts.
+
+    The AutoGluon timeseries KServe server builds a DataFrame directly from the
+    instances via ``pd.DataFrame(rows)`` and then calls ``pd.to_datetime`` on the
+    timestamp column.  Each row must contain scalar values (not single-element lists)
+    because ``pd.to_datetime`` raises TypeError when it encounters list-typed cells.
+    """
+    if not sample:
+        return []
+    col_data = sample[0]  # {col: [val, ...]}
+    n_rows = len(next(iter(col_data.values()), []))
+    return [{col: values[i] for col, values in col_data.items()} for i in range(n_rows)]
+
+
+def _score_inference_service(
+    isvc_url: str,
+    model_name: str,
+    instances: list[dict],
+    token: str | None,
+    max_retries: int = 5,
+    retry_interval_seconds: int = 30,
+) -> dict:
+    """Send a KServe v1 predict request with retry on 5xx transient errors.
+
+    Uses a fixed retry interval for 500/502/503/504 (model still loading / pod
+    starting).
+
+    Returns:
+        Parsed JSON response dict.
+
+    Raises:
+        RuntimeError: After all retries are exhausted.
+    """
+    predict_url = f"{isvc_url.rstrip('/')}/v1/models/{model_name}:predict"
+    payload = json.dumps({"instances": instances}).encode()
+    headers = {"Content-Type": "application/json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+
+    ssl_ctx = ssl.create_default_context()
+    ssl_ctx.check_hostname = False
+    ssl_ctx.verify_mode = ssl.CERT_NONE
+
+    last_error: str = ""
+    for attempt in range(max_retries):
+        try:
+            req = urllib.request.Request(predict_url, data=payload, headers=headers, method="POST")
+            with urllib.request.urlopen(req, context=ssl_ctx, timeout=60) as resp:
+                return json.loads(resp.read().decode())
+        except urllib.error.HTTPError as exc:
+            last_error = f"HTTP {exc.code}: {exc.reason}"
+            if exc.code in (500, 502, 503, 504) and attempt < max_retries - 1:
+                logger.warning(
+                    "Scoring attempt %d/%d got %s — model still loading; retrying in %ds",
+                    attempt + 1,
+                    max_retries,
+                    last_error,
+                    retry_interval_seconds,
+                )
+                time.sleep(retry_interval_seconds)
+                continue
+            raise RuntimeError(last_error) from exc
+        except Exception as exc:
+            last_error = str(exc)
+            if attempt < max_retries - 1:
+                logger.warning(
+                    "Scoring attempt %d/%d failed: %s; retrying in %ds",
+                    attempt + 1,
+                    max_retries,
+                    last_error,
+                    retry_interval_seconds,
+                )
+                time.sleep(retry_interval_seconds)
+                continue
+            raise RuntimeError(last_error) from exc
+
+    raise RuntimeError(f"All {max_retries} scoring attempts failed. Last error: {last_error}")
+
+
+def _list_hardware_profile_names(co, namespace: str) -> list[str]:
+    """Best-effort list of HardwareProfile names in a namespace (for error messages)."""
+    try:
+        lst = co.list_namespaced_custom_object(
+            group="infrastructure.opendatahub.io",
+            version="v1alpha1",
+            namespace=namespace,
+            plural="hardwareprofiles",
+            _request_timeout=_K8S_CALL_TIMEOUT,
+        )
+        items = lst.get("items") or []
+        return sorted((i.get("metadata") or {}).get("name", "") for i in items if (i.get("metadata") or {}).get("name"))
+    except Exception as exc:
+        logger.warning("Could not list HardwareProfiles in %r: %s", namespace, exc)
+        return []
+
+
+def _fetch_hardware_profile_resource_version(co, namespace: str, name: str) -> str:
+    """Fetch ``metadata.resourceVersion`` for a HardwareProfile CR with retries.
+
+    odh-model-controller requires the ``opendatahub.io/hardware-profile-resource-version``
+    annotation to match the live HardwareProfile resourceVersion before it creates the
+    predictor Deployment.
+
+    Returns non-empty resourceVersion string, or "" if all attempts fail.
+    """
+    last_exc: Exception | None = None
+    for attempt in range(_HW_PROFILE_FETCH_ATTEMPTS):
+        try:
+            obj = co.get_namespaced_custom_object(
+                group="infrastructure.opendatahub.io",
+                version="v1alpha1",
+                namespace=namespace,
+                plural="hardwareprofiles",
+                name=name,
+                _request_timeout=_K8S_CALL_TIMEOUT,
+            )
+            rv = (obj.get("metadata") or {}).get("resourceVersion", "")
+            if rv:
+                logger.info(
+                    "HardwareProfile %r/%r resourceVersion=%s (attempt %d)",
+                    namespace,
+                    name,
+                    rv,
+                    attempt + 1,
+                )
+                return rv
+            logger.warning(
+                "HardwareProfile %r/%r returned empty resourceVersion (attempt %d)",
+                namespace,
+                name,
+                attempt + 1,
+            )
+        except Exception as exc:
+            last_exc = exc
+            logger.warning(
+                "HardwareProfile GET %r/%r attempt %d/%d failed: %s",
+                namespace,
+                name,
+                attempt + 1,
+                _HW_PROFILE_FETCH_ATTEMPTS,
+                exc,
+            )
+        if attempt < _HW_PROFILE_FETCH_ATTEMPTS - 1:
+            time.sleep(_HW_PROFILE_FETCH_DELAY_SECONDS)
+
+    available = _list_hardware_profile_names(co, namespace)
+    logger.error(
+        "Could not fetch resourceVersion for HardwareProfile %r in namespace %r after %d attempts. "
+        "HardwareProfiles visible in namespace (if list allowed): %s. Last GET error: %s",
+        name,
+        namespace,
+        _HW_PROFILE_FETCH_ATTEMPTS,
+        available or "(none or not listable)",
+        last_exc,
+    )
+    return ""
+
+
+def _delete_inference_service(co, namespace: str, isvc_name: str) -> None:
+    """Delete an InferenceService, silently ignoring 404."""
+    from kubernetes.client.rest import ApiException
+
+    try:
+        co.delete_namespaced_custom_object(
+            group=_KSERVE_GROUP,
+            version=_KSERVE_ISVC_VERSION,
+            namespace=namespace,
+            plural=_KSERVE_ISVC_PLURAL,
+            name=isvc_name,
+            _request_timeout=_K8S_CALL_TIMEOUT,
+        )
+    except ApiException as e:
+        if e.status != 404:
+            logger.warning("Failed to delete InferenceService %r: %s", isvc_name, e)
 
 
 # ---------------------------------------------------------------------------
@@ -397,6 +1140,7 @@ class TestTimeseriesPipelineFunctional:
         compiled_pipeline_path,
         s3_client,
         s3_cleanup_tracker: S3CleanupTracker,
+        temp_kubeconfig_path,
     ):
         """Run one TC-B scenario end-to-end and validate results."""
         if not kfp_client:
@@ -522,7 +1266,23 @@ class TestTimeseriesPipelineFunctional:
             )
 
         # ------------------------------------------------------------------
-        # 6. Write per-scenario report (xdist-safe: one file per scenario)
+        # 6. [Optional] Deploy top-1 model via KServe and validate
+        # ------------------------------------------------------------------
+        deployment_result: dict = {}
+        if DEPLOY_AFTER_TRAINING and metrics_list:
+            deployment_result = self._run_deployment_test(
+                func_config=func_config,
+                metrics_list=metrics_list,
+                s3_client=s3_client,
+                artifacts_bucket=artifacts_bucket,
+                run_prefix=run_prefix,
+                run_id=run_id,
+                rhoai_integration_config=config,
+                temp_kubeconfig_path=temp_kubeconfig_path,
+            )
+
+        # ------------------------------------------------------------------
+        # 7. Write per-scenario report (xdist-safe: one file per scenario)
         # ------------------------------------------------------------------
         _write_scenario_result(
             func_config.id,
@@ -551,12 +1311,13 @@ class TestTimeseriesPipelineFunctional:
                     }
                     for m in metrics_list
                 ],
+                "deployment": deployment_result,
                 "config": asdict(func_config),
             },
         )
 
         # ------------------------------------------------------------------
-        # 7. Assertions
+        # 8. Assertions
         # ------------------------------------------------------------------
         assert elapsed_seconds < MAX_RUN_DURATION_SECONDS, (
             f"Scenario {func_config.id} took {elapsed_minutes:.1f} min "
@@ -567,3 +1328,341 @@ class TestTimeseriesPipelineFunctional:
             f"Expected at least 1 model with metrics for scenario {func_config.id}; "
             f"found {len(metrics_list)} under s3://{artifacts_bucket}/{run_prefix}"
         )
+
+        if DEPLOY_AFTER_TRAINING and not deployment_result.get("skipped"):
+            assert deployment_result.get("scored"), (
+                f"Scoring failed for scenario {func_config.id}: {deployment_result.get('score_error')}"
+            )
+            predictions = deployment_result.get("predictions")
+            assert predictions is not None, f"No predictions returned for scenario {func_config.id}"
+            assert isinstance(predictions, list) and len(predictions) > 0, (
+                f"Predictions for scenario {func_config.id} must be a non-empty list, got: {predictions!r}"
+            )
+            assert len(predictions) == func_config.prediction_length, (
+                f"Predictions for scenario {func_config.id}: expected {func_config.prediction_length} "
+                f"forecast steps, got {len(predictions)}. predictions={predictions!r}"
+            )
+            # Each forecast step is a dict with item_id, timestamp, mean, and quantile keys.
+            assert all(isinstance(p, dict) for p in predictions), (
+                f"Predictions for scenario {func_config.id} must be a list of dicts, got: {predictions!r}"
+            )
+            assert all("mean" in p for p in predictions), (
+                f"Each prediction dict for scenario {func_config.id} must contain 'mean', got: {predictions!r}"
+            )
+            assert all(isinstance(p["mean"], float) for p in predictions), (
+                f"Prediction 'mean' values for scenario {func_config.id} must be floats, got: {predictions!r}"
+            )
+
+    # ------------------------------------------------------------------
+    # KServe deployment helper (called from test_scenario when enabled)
+    # ------------------------------------------------------------------
+
+    def _run_deployment_test(
+        self,
+        *,
+        func_config: "FunctionalTestConfig",
+        metrics_list: list[dict],
+        s3_client,
+        artifacts_bucket: str,
+        run_prefix: str,
+        run_id: str,
+        rhoai_integration_config: dict,
+        temp_kubeconfig_path: str | None,
+    ) -> dict:
+        """Deploy the top-1 model from a completed pipeline run via KServe.
+
+        Steps:
+          a. Find the top-1 model's predictor prefix in S3.
+          b. Create a temporary RHOAI Data Connection secret with S3 credentials.
+          c. Optionally create the ServingRuntime (if ``RHOAI_CREATE_SERVING_RUNTIME=true``).
+          d. Create the InferenceService with ``storage.key`` pointing at the secret.
+          e. Wait for the InferenceService to become ready.
+          f. Score the model with retries if ``func_config.inference_sample`` is provided.
+          g. Clean up the InferenceService in a ``finally`` block.
+
+        Returns a dict merged into the scenario report under the ``"deployment"`` key.
+        """
+        try:
+            from kubernetes import client
+        except ImportError:
+            logger.warning("kubernetes package not installed; skipping deployment test (pip install kubernetes)")
+            return {"skipped": True, "reason": "kubernetes package not installed"}
+
+        namespace = rhoai_integration_config["rhoai_project"]
+        token = rhoai_integration_config.get("rhoai_token")
+        serving_image = os.environ.get("RHOAI_SERVING_IMAGE", "").strip()
+        create_runtime = os.environ.get("RHOAI_CREATE_SERVING_RUNTIME", "").strip().lower() in ("1", "true", "yes")
+        hardware_profile_name = os.environ.get("RHOAI_HARDWARE_PROFILE_NAME", "default-profile").strip()
+        hardware_profile_namespace = os.environ.get(
+            "RHOAI_HARDWARE_PROFILE_NAMESPACE", "redhat-ods-applications"
+        ).strip()
+
+        top_model = metrics_list[0]
+        model_name = top_model["model_name"]
+
+        # ServingRuntime and InferenceService share the same name so that each
+        # test run gets an isolated, uniquely named pair of resources.
+        isvc_name = _make_isvc_name(func_config.id, run_id)
+        existing_runtime_name = os.environ.get("RHOAI_SERVING_RUNTIME_NAME", "").strip()
+        serving_runtime_name = existing_runtime_name or isvc_name
+
+        result: dict = {
+            "model_name": model_name,
+            "serving_runtime": serving_runtime_name,
+            "storage_key": "(auto-created)",
+            "isvc_ready": False,
+            "isvc_url": None,
+            "scored": False,
+            "predictions": None,
+            "score_error": None,
+        }
+
+        # a. Locate the predictor directory in S3
+        predictor_prefix = _find_top_model_predictor_prefix(s3_client, artifacts_bucket, run_prefix, model_name)
+        if predictor_prefix is None:
+            logger.warning(
+                "Could not find predictor prefix for model %r under %s/%s",
+                model_name,
+                artifacts_bucket,
+                run_prefix,
+            )
+            result["score_error"] = f"Predictor prefix not found for model {model_name!r}"
+            return result
+
+        storage_path = predictor_prefix
+        result["storage_path"] = f"s3://{artifacts_bucket}/{storage_path}"
+        logger.info("Deploying model %r from s3://%s/%s", model_name, artifacts_bucket, storage_path)
+
+        result["isvc_name"] = isvc_name
+        isvc_created = False
+        temp_secret_name: str | None = None
+        temp_sa_name: str | None = None
+        temp_rbac_name: str | None = None
+        temp_runtime_name: str | None = None  # set only when we create a per-run ServingRuntime
+
+        try:
+            _load_k8s_config(temp_kubeconfig_path)
+            v1 = client.CoreV1Api()
+            rbac_v1 = client.RbacAuthorizationV1Api()
+            co = client.CustomObjectsApi()
+
+            # b. Resolve the RHOAI Data Connection (storage key) for the InferenceService.
+            # Preferred: set RHOAI_KSERVE_STORAGE_KEY to a Dashboard-created Data Connection
+            # (already indexed by odh-model-controller).  Fallback: create a temporary secret.
+            existing_storage_key = os.environ.get("RHOAI_KSERVE_STORAGE_KEY", "").strip()
+            if existing_storage_key:
+                storage_key = existing_storage_key
+                logger.info(
+                    "Using existing RHOAI Data Connection %r (RHOAI_KSERVE_STORAGE_KEY) — no temporary secret created",
+                    storage_key,
+                )
+            else:
+                temp_secret_name = f"kserve-s3-{isvc_name[:40]}"
+                _create_kserve_s3_secret(v1, namespace, temp_secret_name, artifacts_bucket, rhoai_integration_config)
+                storage_key = temp_secret_name
+
+                # Confirm the secret was stored with the correct keys (log keys, not values).
+                created_secret = v1.read_namespaced_secret(
+                    temp_secret_name, namespace, _request_timeout=_K8S_CALL_TIMEOUT
+                )
+                secret_keys = sorted((created_secret.data or {}).keys())
+                logger.info(
+                    "Created RHOAI Data Connection secret %r (bucket=%r, keys=%s)",
+                    storage_key,
+                    artifacts_bucket,
+                    secret_keys,
+                )
+
+                temp_sa_name = _create_connection_sa(v1, namespace, temp_secret_name)
+                temp_rbac_name = _create_connection_rbac(rbac_v1, namespace, temp_sa_name, temp_secret_name)
+
+                informer_settle_seconds = 15
+                logger.info(
+                    "Waiting %ds for controller informer to index secret %r and SA %r...",
+                    informer_settle_seconds,
+                    temp_secret_name,
+                    temp_sa_name,
+                )
+                time.sleep(informer_settle_seconds)
+
+            # c. ServingRuntime (optional creation)
+            # RHOAI_SERVING_RUNTIME_NAME controls the runtime *name* only.
+            # Creation is still governed by RHOAI_CREATE_SERVING_RUNTIME=true.
+            if create_runtime:
+                if not serving_image:
+                    logger.warning(
+                        "RHOAI_CREATE_SERVING_RUNTIME=true but RHOAI_SERVING_IMAGE is not set; "
+                        "skipping runtime creation — ServingRuntime %r must already exist",
+                        serving_runtime_name,
+                    )
+                else:
+                    runtime_newly_created = _ensure_serving_runtime(
+                        co,
+                        namespace,
+                        serving_runtime_name,
+                        serving_image,
+                    )
+                    if runtime_newly_created:
+                        # Track per-run runtimes for cleanup; shared runtimes
+                        # (RHOAI_SERVING_RUNTIME_NAME set) are never deleted.
+                        if not existing_runtime_name:
+                            temp_runtime_name = serving_runtime_name
+                        settle_seconds = 30
+                        logger.info(
+                            "ServingRuntime %r was just created — waiting %ds for KServe "
+                            "controller to index it before creating the InferenceService...",
+                            serving_runtime_name,
+                            settle_seconds,
+                        )
+                        time.sleep(settle_seconds)
+
+            # d. Create InferenceService
+            hw_rv = os.environ.get("RHOAI_HARDWARE_PROFILE_RESOURCE_VERSION", "").strip()
+            if not hw_rv:
+                hw_rv = _fetch_hardware_profile_resource_version(co, hardware_profile_namespace, hardware_profile_name)
+            if not hw_rv:
+                raise RuntimeError(
+                    f"Could not resolve opendatahub.io/hardware-profile-resource-version for "
+                    f"HardwareProfile {hardware_profile_name!r} in namespace {hardware_profile_namespace!r}. "
+                    "odh-model-controller will not create the predictor Deployment without this annotation "
+                    "on the InferenceService. Grant get/list on hardwareprofiles.infrastructure.opendatahub.io "
+                    "if needed, fix RHOAI_HARDWARE_PROFILE_NAME / RHOAI_HARDWARE_PROFILE_NAMESPACE, or set "
+                    "RHOAI_HARDWARE_PROFILE_RESOURCE_VERSION to "
+                    "`oc get hardwareprofile -n <ns> <name> -o jsonpath='{.metadata.resourceVersion}'`."
+                )
+            _create_inference_service(
+                co,
+                namespace,
+                isvc_name,
+                serving_runtime_name,
+                storage_path,
+                storage_key,
+                hardware_profile_name=hardware_profile_name,
+                hardware_profile_namespace=hardware_profile_namespace,
+                hardware_profile_resource_version=hw_rv,
+            )
+            isvc_created = True
+            logger.info("Created InferenceService %r in namespace %r", isvc_name, namespace)
+
+            # e. Wait for InferenceService to become Ready
+            inference_timeout = int(os.environ.get("RHOAI_INFERENCE_TIMEOUT", "300"))
+            logger.info(
+                "InferenceService %r created — waiting up to %ds for Ready=True "
+                "(polling every 30s with full condition logging)...",
+                isvc_name,
+                inference_timeout,
+            )
+            isvc_ready, blocking_reason = _wait_for_isvc_ready(
+                co, namespace, isvc_name, timeout_seconds=inference_timeout
+            )
+            result["isvc_ready"] = isvc_ready
+
+            if blocking_reason:
+                msg = f"InferenceService {isvc_name!r} has a blocking condition: {blocking_reason}"
+                logger.error(msg)
+                result["score_error"] = msg
+                return result
+
+            if not isvc_ready:
+                logger.warning(
+                    "InferenceService %r not Ready after %ds — "
+                    "Route/Service may still exist; attempting score with retries...",
+                    isvc_name,
+                    inference_timeout,
+                )
+
+            external_url = _resolve_isvc_external_url(co, namespace, isvc_name)
+            result["isvc_url"] = external_url
+
+            if not external_url:
+                msg = (
+                    f"InferenceService {isvc_name!r}: no external Route host found "
+                    f"after {inference_timeout}s — cannot score from outside the cluster. "
+                    f"Ensure the ISVC has networking.kserve.io/visibility=exposed."
+                )
+                logger.warning(msg)
+                result["score_error"] = msg
+                return result
+
+            logger.info("InferenceService %r: scoring via %s", isvc_name, external_url)
+
+            # f. Score via the external Route URL with retries.
+            if not func_config.inference_sample:
+                logger.info("No inference_sample in config %r — skipping scoring", func_config.id)
+            else:
+                instances = _column_sample_to_instances(func_config.inference_sample)
+                logger.info(
+                    "Scoring %r via %s with %d instance(s): %s",
+                    isvc_name,
+                    external_url,
+                    len(instances),
+                    json.dumps(instances, default=str),
+                )
+                try:
+                    response = _score_inference_service(external_url, isvc_name, instances, token)
+                    result["scored"] = True
+                    result["predictions"] = response.get("predictions")
+                    logger.info("Scoring succeeded for %r: %s", isvc_name, json.dumps(response, default=str))
+                except Exception as score_err:
+                    logger.warning("Scoring failed for %r: %s", isvc_name, score_err)
+                    result["score_error"] = str(score_err)
+
+        except Exception as deploy_err:
+            logger.error("Deployment test failed for scenario %r: %s", func_config.id, deploy_err, exc_info=True)
+            result["score_error"] = str(deploy_err)
+
+        finally:
+            # g. Always clean up all created Kubernetes objects — unconditionally.
+            # AUTOML_FUNCTIONAL_TEST_KEEP_ARTIFACTS only governs S3 artifact retention;
+            # it does NOT affect teardown of deployment resources (ISVC, secret, SA, RBAC).
+            # These are always deleted here to avoid orphaning resources on the cluster.
+            if isvc_created:
+                try:
+                    _load_k8s_config(temp_kubeconfig_path)
+                    co_cleanup = client.CustomObjectsApi()
+                    _delete_inference_service(co_cleanup, namespace, isvc_name)
+                    logger.info("Deleted InferenceService %r", isvc_name)
+                except Exception as cleanup_err:
+                    logger.warning("Failed to clean up InferenceService %r: %s", isvc_name, cleanup_err)
+            # Clean up a per-run ServingRuntime if we created one.
+            # Shared runtimes (RHOAI_SERVING_RUNTIME_NAME set) are never deleted.
+            if temp_runtime_name:
+                try:
+                    co.delete_namespaced_custom_object(
+                        group=_KSERVE_GROUP,
+                        version=_KSERVE_SR_VERSION,
+                        namespace=namespace,
+                        plural=_KSERVE_SR_PLURAL,
+                        name=temp_runtime_name,
+                        _request_timeout=_K8S_CALL_TIMEOUT,
+                    )
+                    logger.info("Deleted temporary ServingRuntime %r", temp_runtime_name)
+                except Exception as sr_err:
+                    logger.warning("Failed to delete temporary ServingRuntime %r: %s", temp_runtime_name, sr_err)
+            if temp_secret_name:
+                try:
+                    v1.delete_namespaced_secret(temp_secret_name, namespace, _request_timeout=_K8S_CALL_TIMEOUT)
+                    logger.info("Deleted temporary KServe S3 secret %r", temp_secret_name)
+                except Exception as secret_cleanup_err:
+                    logger.warning("Failed to delete temporary secret %r: %s", temp_secret_name, secret_cleanup_err)
+            if temp_rbac_name:
+                try:
+                    rbac_v1.delete_namespaced_role_binding(
+                        temp_rbac_name, namespace, _request_timeout=_K8S_CALL_TIMEOUT
+                    )
+                    logger.info("Deleted temporary RoleBinding %r", temp_rbac_name)
+                except Exception as rb_err:
+                    logger.warning("Failed to delete temporary RoleBinding %r: %s", temp_rbac_name, rb_err)
+                try:
+                    rbac_v1.delete_namespaced_role(temp_rbac_name, namespace, _request_timeout=_K8S_CALL_TIMEOUT)
+                    logger.info("Deleted temporary Role %r", temp_rbac_name)
+                except Exception as role_err:
+                    logger.warning("Failed to delete temporary Role %r: %s", temp_rbac_name, role_err)
+            if temp_sa_name:
+                try:
+                    v1.delete_namespaced_service_account(temp_sa_name, namespace, _request_timeout=_K8S_CALL_TIMEOUT)
+                    logger.info("Deleted temporary ServiceAccount %r", temp_sa_name)
+                except Exception as sa_cleanup_err:
+                    logger.warning("Failed to delete temporary SA %r: %s", temp_sa_name, sa_cleanup_err)
+
+        return result
