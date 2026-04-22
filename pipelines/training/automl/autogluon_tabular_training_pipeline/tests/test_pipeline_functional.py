@@ -342,6 +342,263 @@ def _find_test_dataset_csv(s3_client, bucket: str, run_prefix: str) -> str | Non
 
 
 # ---------------------------------------------------------------------------
+# Pipeline run failure diagnostics (pod log retrieval)
+# ---------------------------------------------------------------------------
+
+
+def _derive_k8s_api_url(kfp_url: str | None) -> str | None:
+    """Derive OpenShift API server URL from a KFP route URL.
+
+    Standard OCP: https://<route>.apps.<cluster-domain> -> https://api.<cluster-domain>:6443
+    ROSA:         https://<route>.apps.rosa.<cluster-domain> -> https://api.<cluster-domain>:443
+
+    Override entirely with K8S_API_URL env var, or just the port with K8S_API_PORT.
+    """
+    override = os.environ.get("K8S_API_URL")
+    if override:
+        return override.strip().rstrip("/")
+
+    if not kfp_url:
+        return None
+
+    from urllib.parse import urlparse
+
+    hostname = urlparse(kfp_url).hostname or ""
+    apps_idx = hostname.find(".apps.")
+    if apps_idx < 0:
+        return None
+    base_domain = hostname[apps_idx + len(".apps.") :]
+    is_rosa = base_domain.startswith("rosa.")
+    if is_rosa:
+        base_domain = base_domain[len("rosa.") :]
+    default_port = 443 if is_rosa else 6443
+    port = os.environ.get("K8S_API_PORT", str(default_port)).strip()
+    return f"https://api.{base_domain}:{port}"
+
+
+def _make_k8s_core_api(token: str, kfp_url: str | None):
+    """Create a Kubernetes CoreV1Api client authenticated with a bearer token."""
+    from kubernetes import client as k8s_client
+
+    api_url = _derive_k8s_api_url(kfp_url)
+    if not api_url:
+        raise RuntimeError(f"Cannot derive K8S API URL from KFP URL: {kfp_url!r}")
+
+    verify_ssl = os.environ.get("KFP_VERIFY_SSL", "true").strip().lower()
+    verify_ssl = verify_ssl not in ("0", "false", "no")
+
+    configuration = k8s_client.Configuration()
+    configuration.host = api_url
+    configuration.api_key = {"authorization": f"Bearer {token}"}
+    configuration.verify_ssl = verify_ssl
+    if not verify_ssl:
+        import urllib3
+
+        urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+    return k8s_client.CoreV1Api(api_client=k8s_client.ApiClient(configuration))
+
+
+def _is_pod_failed(pod) -> bool:
+    """Return True if a pod is in a failed state."""
+    phase = (pod.status.phase or "") if pod.status else ""
+    if phase.lower() == "failed":
+        return True
+    for cs in (pod.status.container_statuses or []) if pod.status else []:
+        terminated = cs.state.terminated if cs.state else None
+        if terminated and terminated.exit_code != 0:
+            return True
+    return False
+
+
+def _append_failed_pod_logs(
+    run_id: str,
+    namespace: str | None,
+    lines: list[str],
+    token: str | None = None,
+    kfp_url: str | None = None,
+) -> None:
+    """Find failed pods for a pipeline run by label and append their logs to *lines*.
+
+    Lists pods matching ``pipeline/runid=<run_id>`` in the given namespace,
+    filters for failed pods, and fetches logs from each container.
+    """
+    if not token or not kfp_url:
+        lines.append("\n[Missing RHOAI_TOKEN or RHOAI_KFP_URL; skipping pod log fetch]")
+        return
+
+    try:
+        import kubernetes  # noqa: F401
+    except ImportError:
+        lines.append("\n[kubernetes package not installed; skipping pod log fetch]")
+        return
+
+    ns = namespace or "default"
+    try:
+        api = _make_k8s_core_api(token, kfp_url)
+    except Exception as e:
+        lines.append(f"\n[Could not create Kubernetes client: {e}]")
+        return
+
+    try:
+        pod_list = api.list_namespaced_pod(
+            namespace=ns,
+            label_selector=f"pipeline/runid={run_id}",
+            _request_timeout=30,
+        )
+    except Exception as e:
+        lines.append(f"\n[Could not list pods in namespace {ns!r}: {e}]")
+        return
+
+    if not pod_list.items:
+        lines.append(f"\n[No pods found with label pipeline/runid={run_id} in namespace {ns!r}]")
+        return
+
+    failed_pods = [p for p in pod_list.items if _is_pod_failed(p)]
+
+    if not failed_pods:
+        all_phases = ", ".join(f"{p.metadata.name}={p.status.phase if p.status else 'unknown'}" for p in pod_list.items)
+        lines.append(f"\n[No failed pods among {len(pod_list.items)} pods: {all_phases}]")
+        return
+
+    lines.append(f"\nFound {len(failed_pods)} failed pod(s) out of {len(pod_list.items)} total")
+
+    for pod in failed_pods:
+        pod_name = pod.metadata.name
+        phase = pod.status.phase if pod.status else "unknown"
+        lines.append(f"\n--- Failed pod: {pod_name} (phase: {phase}) ---")
+
+        containers = [c.name for c in (pod.spec.containers or [])] if pod.spec else []
+        for container_name in containers:
+            try:
+                log = api.read_namespaced_pod_log(
+                    name=pod_name,
+                    namespace=ns,
+                    container=container_name,
+                    tail_lines=100,
+                    _request_timeout=60,
+                )
+                lines.append(f"[container: {container_name}]")
+                lines.append(log if log else "(empty)")
+            except Exception as e:
+                lines.append(f"[container: {container_name}] error fetching logs: {e}")
+
+
+def _collect_failure_details(client, run_id: str, config: dict | None = None) -> str:
+    """Collect failure details from a failed pipeline run and return a formatted string.
+
+    Fetches run-level and task-level error info from the KFP API, then retrieves
+    pod logs via the Kubernetes API using the ``pipeline/runid`` label selector.
+
+    Args:
+        client: KFP client instance.
+        run_id: The pipeline run ID.
+        config: Integration config dict with ``rhoai_token``, ``rhoai_kfp_url``,
+            and ``rhoai_project`` keys (from ``rhoai_integration_config`` fixture).
+
+    Returns:
+        Formatted multi-line string with failure details and pod logs.
+    """
+    lines = [f"\n{'=' * 80}", f"FAILURE DETAILS FOR RUN: {run_id}", "=" * 80]
+
+    # --- Run-level and task-level details from KFP v2 API ---
+    try:
+        run_detail = client.get_run(run_id)
+        run_obj = getattr(run_detail, "run", run_detail)
+
+        run_error = getattr(run_obj, "error", None)
+        if run_error:
+            error_msg = getattr(run_error, "message", str(run_error))
+            lines.append(f"\nRUN ERROR: {error_msg}")
+
+        rd = getattr(run_obj, "run_details", None)
+        task_list = getattr(rd, "task_details", None) if rd else None
+
+        if task_list:
+            _INTERNAL_SUFFIXES = ("-driver",)
+            _INTERNAL_NAMES = ("root", "executor")
+
+            for task in task_list:
+                name = getattr(task, "display_name", None) or getattr(task, "task_id", "?")
+                state = getattr(task, "state", None)
+                state_str = str(state).upper() if state else "NOT_STARTED"
+
+                if name in _INTERNAL_NAMES or any(name.endswith(s) for s in _INTERNAL_SUFFIXES):
+                    continue
+
+                if state_str in ("FAILED", "ERROR", "SYSTEM_ERROR"):
+                    lines.append(f"\nFAILED TASK: {name}")
+                    lines.append(f"  State: {state_str}")
+                    task_error = getattr(task, "error", None)
+                    if task_error:
+                        error_msg = getattr(task_error, "message", str(task_error))
+                        lines.append(f"  Error: {error_msg}")
+                    start = getattr(task, "start_time", None)
+                    end = getattr(task, "end_time", None)
+                    if start and end:
+                        lines.append(f"  Duration: {start} -> {end}")
+                else:
+                    lines.append(f"  TASK: {name} — {state_str}")
+        else:
+            lines.append("\n[No task_details in run response]")
+    except Exception as e:
+        lines.append(f"\n[Could not fetch run details from KFP API: {e}]")
+
+    # --- Pod logs via Kubernetes API (label-based pod discovery) ---
+    try:
+        namespace = config.get("rhoai_project") if config else None
+        token = config.get("rhoai_token") if config else None
+        kfp_url = config.get("rhoai_kfp_url") if config else None
+        _append_failed_pod_logs(run_id, namespace, lines, token=token, kfp_url=kfp_url)
+    except Exception as e:
+        lines.append(f"\n[Could not fetch pod logs: {e}]")
+
+    lines.append("=" * 80)
+    return "\n".join(lines)
+
+
+def _fetch_pod_logs_str(v1, namespace: str, label_selector: str, tail_lines: int = 100) -> str:
+    """Fetch logs from all pods matching *label_selector* and return a formatted string.
+
+    Unlike ``_append_failed_pod_logs`` (which filters for failed pods only), this
+    function fetches logs from every pod matching the selector — useful for Job pods
+    and KServe predictor pods that may still be running or in CrashLoopBackOff.
+    """
+    lines = []
+    try:
+        pod_list = v1.list_namespaced_pod(
+            namespace=namespace,
+            label_selector=label_selector,
+            _request_timeout=30,
+        )
+        if not pod_list.items:
+            return f"[No pods found with label selector {label_selector!r} in namespace {namespace!r}]"
+
+        lines.append(f"Pod logs for label selector {label_selector!r} ({len(pod_list.items)} pod(s)):")
+        for pod in pod_list.items:
+            pod_name = pod.metadata.name
+            phase = pod.status.phase if pod.status else "unknown"
+            lines.append(f"\n--- Pod: {pod_name} (phase: {phase}) ---")
+            containers = [c.name for c in (pod.spec.containers or [])] if pod.spec else []
+            for container_name in containers:
+                try:
+                    log = v1.read_namespaced_pod_log(
+                        name=pod_name,
+                        namespace=namespace,
+                        container=container_name,
+                        tail_lines=tail_lines,
+                        _request_timeout=60,
+                    )
+                    lines.append(f"[container: {container_name}]")
+                    lines.append(log if log else "(empty)")
+                except Exception as e:
+                    lines.append(f"[container: {container_name}] error fetching logs: {e}")
+    except Exception as e:
+        return f"[Could not fetch pod logs for {label_selector!r}: {e}]"
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
 # KServe deployment helpers
 # ---------------------------------------------------------------------------
 
@@ -1477,10 +1734,12 @@ class TestAutogluonPipelineFunctional:
         # 4. Assert pipeline succeeded
         # ------------------------------------------------------------------
         succeeded = _run_succeeded(detail)
-        assert succeeded, (
-            f"Pipeline run {run_id} did not succeed for scenario {func_config.id}; "
-            f"state={getattr(getattr(detail, 'run', detail), 'state', 'unknown')}"
-        )
+        if not succeeded:
+            failure_details = _collect_failure_details(kfp_client, run_id, config=config)
+            pytest.fail(
+                f"Pipeline run {run_id} did not succeed for scenario {func_config.id}; "
+                f"state={getattr(getattr(detail, 'run', detail), 'state', 'unknown')}" + failure_details
+            )
 
         # ------------------------------------------------------------------
         # 5. Read metrics, model sizes, leaderboard, and test dataset from S3
@@ -2010,8 +2269,9 @@ class TestAutogluonPipelineFunctional:
                     result["predictions"] = response.get("predictions")
                     logger.info("Scoring succeeded for %r: %s", isvc_name, json.dumps(response, default=str))
                 except Exception as score_err:
+                    pod_logs = _fetch_pod_logs_str(v1, namespace, f"serving.kserve.io/inferenceservice={isvc_name}")
                     logger.warning("Scoring failed for %r: %s", isvc_name, score_err)
-                    result["score_error"] = str(score_err)
+                    result["score_error"] = f"{score_err}\n{pod_logs}"
 
         except Exception as deploy_err:
             logger.error("Deployment test failed for scenario %r: %s", func_config.id, deploy_err, exc_info=True)
@@ -2289,7 +2549,8 @@ class TestAutogluonPipelineFunctional:
                         logger.info("Notebook Job %r succeeded in %.0fs", job_name, elapsed)
                         break
                     if failed >= 1:
-                        msg = f"Notebook Job {job_name!r} failed after {elapsed:.0f}s"
+                        pod_logs = _fetch_pod_logs_str(v1, namespace, f"job-name={job_name}")
+                        msg = f"Notebook Job {job_name!r} failed after {elapsed:.0f}s\n{pod_logs}"
                         logger.error(msg)
                         result["error"] = msg
                         result["elapsed_seconds"] = round(elapsed, 1)
@@ -2298,7 +2559,8 @@ class TestAutogluonPipelineFunctional:
                     logger.warning("Failed to poll Job %r: %s", job_name, poll_exc)
 
                 if elapsed >= notebook_run_timeout:
-                    msg = f"Notebook Job {job_name!r} timed out after {elapsed:.0f}s"
+                    pod_logs = _fetch_pod_logs_str(v1, namespace, f"job-name={job_name}")
+                    msg = f"Notebook Job {job_name!r} timed out after {elapsed:.0f}s\n{pod_logs}"
                     logger.error(msg)
                     result["error"] = msg
                     result["elapsed_seconds"] = round(elapsed, 1)
