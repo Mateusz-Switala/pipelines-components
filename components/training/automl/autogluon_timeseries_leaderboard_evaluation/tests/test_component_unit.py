@@ -55,20 +55,11 @@ def html_output_path(tmp_path):
     return str(tmp_path / "leaderboard.html")
 
 
-@pytest.fixture()
-def embedded_artifact():
-    """Provide mock embedded artifact pointing to shared dir (for leaderboard_html_template.html)."""
-    shared_dir = Path(__file__).resolve().parent.parent.parent / "shared"
-    mock_artifact = mock.MagicMock()
-    mock_artifact.path = str(shared_dir)
-    return mock_artifact
-
-
 class TestTimeseriesLeaderboardEvaluationUnitTests:
     """Unit tests for timeseries_leaderboard_evaluation component logic."""
 
     @mock.patch("pandas.DataFrame")
-    def test_single_model(self, mock_dataframe_class, tmp_path, html_output_path, embedded_artifact):
+    def test_single_model(self, mock_dataframe_class, tmp_path, html_output_path):
         """Test leaderboard with a single model: return value, metadata, HTML output."""
         artifact = _make_model_artifact(tmp_path / "ets", "ETS", {"MASE": -0.85, "WAPE": -0.12})
 
@@ -98,7 +89,6 @@ class TestTimeseriesLeaderboardEvaluationUnitTests:
             models=[artifact],
             eval_metric="MASE",
             html_artifact=mock_html,
-            embedded_artifact=embedded_artifact,
         )
 
         # Verify DataFrame constructed with correct data read from metrics.json
@@ -131,7 +121,7 @@ class TestTimeseriesLeaderboardEvaluationUnitTests:
         assert "uri-cell" in html
 
     @mock.patch("pandas.DataFrame")
-    def test_multiple_models(self, mock_dataframe_class, tmp_path, html_output_path, embedded_artifact):
+    def test_multiple_models(self, mock_dataframe_class, tmp_path, html_output_path):
         """Test leaderboard with multiple models and best_model selection."""
         artifacts = [
             _make_model_artifact(tmp_path / "ets", "ETS", {"MASE": -0.85, "WAPE": -0.12}),
@@ -158,7 +148,6 @@ class TestTimeseriesLeaderboardEvaluationUnitTests:
             models=artifacts,
             eval_metric="MASE",
             html_artifact=mock_html,
-            embedded_artifact=embedded_artifact,
         )
 
         call_args = mock_dataframe_class.call_args[0][0]
@@ -179,9 +168,7 @@ class TestTimeseriesLeaderboardEvaluationUnitTests:
         assert "Theta_FULL" in html
 
     @mock.patch("pandas.DataFrame")
-    def test_partial_missing_metrics_file_skips_bad_artifact(
-        self, mock_dataframe_class, tmp_path, html_output_path, embedded_artifact
-    ):
+    def test_partial_missing_metrics_file_skips_bad_artifact(self, mock_dataframe_class, tmp_path, html_output_path):
         """Artifact with no metrics.json is skipped; valid artifacts still appear in the leaderboard."""
         # Simulate a failed refit task: artifact path exists but has no metrics.json
         bad_path = tmp_path / "tft"
@@ -208,7 +195,6 @@ class TestTimeseriesLeaderboardEvaluationUnitTests:
             models=[bad_artifact, good_artifact],
             eval_metric="MASE",
             html_artifact=mock_html,
-            embedded_artifact=embedded_artifact,
         )
 
         call_args = mock_dataframe_class.call_args[0][0]
@@ -216,7 +202,7 @@ class TestTimeseriesLeaderboardEvaluationUnitTests:
         assert call_args[0]["model"] == "ETS_FULL"
         assert result.best_model == "ETS_FULL"
 
-    def test_empty_models_raises(self, html_output_path, embedded_artifact):
+    def test_empty_models_raises(self, html_output_path):
         """Test that ValueError is raised when models list is empty."""
         mock_html = mock.MagicMock()
         mock_html.path = html_output_path
@@ -227,10 +213,9 @@ class TestTimeseriesLeaderboardEvaluationUnitTests:
                 models=[],
                 eval_metric="MASE",
                 html_artifact=mock_html,
-                embedded_artifact=embedded_artifact,
             )
 
-    def test_empty_eval_metric_raises(self, tmp_path, embedded_artifact):
+    def test_empty_eval_metric_raises(self, tmp_path):
         """Test that TypeError is raised when eval_metric is empty or not a string."""
         artifact = _make_model_artifact(tmp_path / "ets", "ETS", {"MASE": -0.85})
         mock_html = mock.MagicMock()
@@ -241,7 +226,6 @@ class TestTimeseriesLeaderboardEvaluationUnitTests:
                 models=[artifact],
                 eval_metric="",
                 html_artifact=mock_html,
-                embedded_artifact=embedded_artifact,
             )
 
         with pytest.raises(TypeError, match=r"eval_metric must be a non-empty string\."):
@@ -249,10 +233,9 @@ class TestTimeseriesLeaderboardEvaluationUnitTests:
                 models=[artifact],
                 eval_metric="   ",
                 html_artifact=mock_html,
-                embedded_artifact=embedded_artifact,
             )
 
-    def test_all_missing_metrics_files_raises(self, tmp_path, html_output_path, embedded_artifact):
+    def test_all_missing_metrics_files_raises(self, tmp_path, html_output_path):
         """ValueError raised when every artifact is missing its metrics.json (all refit tasks failed)."""
         empty_path = tmp_path / "empty"
         empty_path.mkdir()
@@ -270,10 +253,9 @@ class TestTimeseriesLeaderboardEvaluationUnitTests:
                 models=[artifact],
                 eval_metric="MASE",
                 html_artifact=mock_html,
-                embedded_artifact=embedded_artifact,
             )
 
-    def test_uri_construction(self, tmp_path, embedded_artifact):
+    def test_uri_construction(self, tmp_path):
         """Predictor and notebook URIs are derived from artifact.uri and the model directory name."""
         artifact = _make_model_artifact(
             tmp_path / "ets",
@@ -308,7 +290,6 @@ class TestTimeseriesLeaderboardEvaluationUnitTests:
                 models=[artifact],
                 eval_metric="MASE",
                 html_artifact=mock_html,
-                embedded_artifact=embedded_artifact,
             )
 
             call_args = mock_df_class.call_args[0][0]
@@ -316,7 +297,7 @@ class TestTimeseriesLeaderboardEvaluationUnitTests:
             assert call_args[0]["predictor"] == f"{expected_base}/ETS_FULL/predictor"
             assert call_args[0]["notebook"] == f"{expected_base}/ETS_FULL/notebooks/automl_predictor_notebook.ipynb"
 
-    def test_artifact_missing_metrics_json_skipped_with_warning(self, tmp_path, html_output_path, embedded_artifact):
+    def test_artifact_missing_metrics_json_skipped_with_warning(self, tmp_path, html_output_path):
         """Artifact without metrics/metrics.json is skipped with a warning, not an error."""
         # One valid artifact, one with no metrics.json
         good_artifact = _make_model_artifact(tmp_path / "ets", "ETS", {"MASE": -0.85, "WAPE": -0.12})
@@ -346,7 +327,6 @@ class TestTimeseriesLeaderboardEvaluationUnitTests:
                 models=[bad_artifact, good_artifact],
                 eval_metric="MASE",
                 html_artifact=mock_html,
-                embedded_artifact=embedded_artifact,
             )
 
             # Only the good artifact should be in results
@@ -355,7 +335,7 @@ class TestTimeseriesLeaderboardEvaluationUnitTests:
             assert call_args[0]["model"] == "ETS_FULL"
             assert result.best_model == "ETS_FULL"
 
-    def test_all_artifacts_missing_metrics_raises_value_error(self, tmp_path, html_output_path, embedded_artifact):
+    def test_all_artifacts_missing_metrics_raises_value_error(self, tmp_path, html_output_path):
         """ValueError is raised when all artifacts are missing metrics.json."""
         bad_dir = tmp_path / "bad"
         bad_dir.mkdir()
@@ -373,7 +353,6 @@ class TestTimeseriesLeaderboardEvaluationUnitTests:
                 models=[bad_artifact],
                 eval_metric="MASE",
                 html_artifact=mock_html,
-                embedded_artifact=embedded_artifact,
             )
 
     def test_component_imports_correctly(self):

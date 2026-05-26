@@ -21,7 +21,6 @@ Note: KFP does not propagate artifact metadata through executor inputs for colle
 | `models` | `List[dsl.Model]` | `None` | List of model artifacts from ``autogluon_timeseries_models_full_refit`` collected via ``dsl.Collected``. Each artifact provides metrics and location metadata for one refitted model. |
 | `eval_metric` | `str` | `None` | Metric name for ranking (e.g. ``"MASE"``, ``"WAPE"``); leaderboard is sorted descending (AutoGluon uses higher-is-better convention so metrics like MASE are negated - higher value means better model). |
 | `html_artifact` | `dsl.Output[dsl.HTML]` | `None` | Output artifact for the HTML-formatted leaderboard. |
-| `embedded_artifact` | `dsl.EmbeddedInput[dsl.Artifact]` | `None` | Embedded shared files injected by the KFP runtime; provides ``leaderboard_html_template.html``. |
 
 ## Outputs 📤
 
