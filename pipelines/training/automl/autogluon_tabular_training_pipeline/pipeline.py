@@ -178,7 +178,9 @@ def autogluon_tabular_training_pipeline(
     )
     data_loader_task.after(component_stage_map_task)
     data_loader_task.set_caching_options(False)
-    data_loader_task.set_cpu_request("2").set_memory_request("8Gi").set_cpu_limit(MAX_CPUS).set_memory_limit(MAX_MEMORY)
+    # The loader parses and samples multi-gigabyte CSVs; reserve enough CPU for
+    # pandas parsing and multipart S3 transfer instead of relying on burst capacity.
+    data_loader_task.set_cpu_request("4").set_memory_request("8Gi").set_cpu_limit(MAX_CPUS).set_memory_limit(MAX_MEMORY)
 
     # Object storage credentials for data loading.
     use_secret_as_env(
