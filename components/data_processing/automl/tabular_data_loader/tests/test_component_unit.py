@@ -761,6 +761,39 @@ class TestAutomlDataLoaderUnitTests:
         finally:
             MockedDataFrame.BYTES_PER_ROW = original_bytes_per_row
 
+    @pytest.mark.parametrize(
+        ("sampling_method", "task_type"),
+        [("random", "regression"), ("stratified", "binary")],
+    )
+    @mock.patch.dict("os.environ", mocked_env_variables)
+    def test_object_payload_memory_limits_representative_samples(self, tmp_path, sampling_method, task_type):
+        """Random and stratified sampling account for object payloads, not just references."""
+        csv_content = "feature,target\n" + "\n".join(f"string-value-{row},{row % 2}" for row in range(2000))
+        original_bytes_per_row = MockedDataFrame.BYTES_PER_ROW
+        original_shallow_bytes_per_row = MockedDataFrame.SHALLOW_BYTES_PER_ROW
+        try:
+            # Model a string-heavy object column: references fit the budget, while
+            # the actual string payloads exceed it.
+            MockedDataFrame.BYTES_PER_ROW = 120_000
+            MockedDataFrame.SHALLOW_BYTES_PER_ROW = 100
+            sampled_test = _make_test_artifact(tmp_path, f"{sampling_method}-test.csv")
+
+            with _mock_boto3_and_pandas(get_object_return={"Body": _csv_body(csv_content, pad=False)}):
+                result = automl_data_loader.python_func(
+                    file_key="data/string-heavy.csv",
+                    bucket_name="bucket",
+                    workspace_path=str(tmp_path / sampling_method),
+                    label_column="target",
+                    sampled_test_dataset=sampled_test,
+                    sampling_method=sampling_method,
+                    task_type=task_type,
+                )
+
+            assert MIN_VALID_RECORDS <= result.sample_config["n_samples"] < 2000
+        finally:
+            MockedDataFrame.BYTES_PER_ROW = original_bytes_per_row
+            MockedDataFrame.SHALLOW_BYTES_PER_ROW = original_shallow_bytes_per_row
+
     @mock.patch.dict("os.environ", mocked_env_variables)
     def test_component_random_sampling_multiple_chunks(self, tmp_path):
         """Test random sampling with CSV large enough to trigger multiple chunks (>10k rows)."""

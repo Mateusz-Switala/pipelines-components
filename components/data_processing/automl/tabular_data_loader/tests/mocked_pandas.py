@@ -15,7 +15,8 @@ from collections import Counter
 class MockedDataFrame:
     """Minimal DataFrame-like object: columns (list) and rows (list of lists, one per row)."""
 
-    BYTES_PER_ROW = 100  # Used for memory_usage(deep=True).sum()
+    BYTES_PER_ROW = 100  # Used for memory_usage(deep=True).sum().
+    SHALLOW_BYTES_PER_ROW = None  # When set, used for memory_usage(deep=False).sum().
 
     def __init__(self, columns, rows):
         """Store column names and row data."""
@@ -37,7 +38,7 @@ class MockedDataFrame:
         return len(self._rows)
 
     def memory_usage(self, deep=True):
-        """Return a mock object whose sum() is BYTES_PER_ROW times row count."""
+        """Return a mock memory estimate, optionally distinguishing shallow object storage."""
 
         class MemUsage:
             """Mock memory usage object with sum() returning byte estimate."""
@@ -47,8 +48,11 @@ class MockedDataFrame:
                 self._df = df
 
             def sum(self):
-                """Return BYTES_PER_ROW times number of rows."""
-                return len(self._df._rows) * MockedDataFrame.BYTES_PER_ROW
+                """Return the configured byte estimate times number of rows."""
+                bytes_per_row = MockedDataFrame.BYTES_PER_ROW
+                if not deep and MockedDataFrame.SHALLOW_BYTES_PER_ROW is not None:
+                    bytes_per_row = MockedDataFrame.SHALLOW_BYTES_PER_ROW
+                return len(self._df._rows) * bytes_per_row
 
         return MemUsage(self)
 

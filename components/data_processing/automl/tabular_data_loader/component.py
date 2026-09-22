@@ -294,18 +294,20 @@ def automl_data_loader(  # noqa: D417
             """Merge batches and subsample proportionally by target column to stay under the size limit."""
             subsampled_data = None
             pending_chunks = []
+            pending_memory = 0
 
             def compact_pending():
                 """Merge pending chunks once, rather than copying the sample per chunk."""
-                nonlocal subsampled_data, pending_chunks
+                nonlocal subsampled_data, pending_chunks, pending_memory
                 if not pending_chunks:
                     return
                 frames = ([subsampled_data] if subsampled_data is not None else []) + pending_chunks
                 combined_data = pd.concat(frames, ignore_index=True)
                 pending_chunks = []
-                # Shallow accounting is constant-time for object columns. Deep memory
-                # is recorded after sampling, outside the ingestion hot path.
-                combined_memory = combined_data.memory_usage(deep=False).sum()
+                pending_memory = 0
+                # Include object payloads: shallow accounting measures only object
+                # references and can substantially undercount string-heavy CSVs.
+                combined_memory = combined_data.memory_usage(deep=True).sum()
                 if combined_memory <= max_size_bytes:
                     subsampled_data = combined_data
                     return
@@ -328,7 +330,8 @@ def automl_data_loader(  # noqa: D417
                         continue
 
                     pending_chunks.append(chunk_df)
-                    if len(pending_chunks) >= SAMPLE_COMPACTION_CHUNKS:
+                    pending_memory += chunk_df.memory_usage(deep=True).sum()
+                    if pending_memory >= max_size_bytes or len(pending_chunks) >= SAMPLE_COMPACTION_CHUNKS:
                         compact_pending()
 
                 compact_pending()
@@ -346,16 +349,20 @@ def automl_data_loader(  # noqa: D417
             """Iterate all batches, merge with accumulated data, randomly subsample when over the limit."""
             subsampled_data = None
             pending_chunks = []
+            pending_memory = 0
 
             def compact_pending():
                 """Merge pending chunks once, rather than copying the sample per chunk."""
-                nonlocal subsampled_data, pending_chunks
+                nonlocal subsampled_data, pending_chunks, pending_memory
                 if not pending_chunks:
                     return
                 frames = ([subsampled_data] if subsampled_data is not None else []) + pending_chunks
                 data = pd.concat(frames, ignore_index=True)
                 pending_chunks = []
-                combined_memory = data.memory_usage(deep=False).sum()
+                pending_memory = 0
+                # Include object payloads so the retained sample respects the
+                # configured in-memory budget for string-heavy CSVs.
+                combined_memory = data.memory_usage(deep=True).sum()
                 if combined_memory <= max_size_bytes:
                     subsampled_data = data
                     return
@@ -367,7 +374,8 @@ def automl_data_loader(  # noqa: D417
             try:
                 for chunk_df in pd.read_csv(csv_source, chunksize=chunk_size):
                     pending_chunks.append(chunk_df)
-                    if len(pending_chunks) >= SAMPLE_COMPACTION_CHUNKS:
+                    pending_memory += chunk_df.memory_usage(deep=True).sum()
+                    if pending_memory >= max_size_bytes or len(pending_chunks) >= SAMPLE_COMPACTION_CHUNKS:
                         compact_pending()
 
                 compact_pending()
