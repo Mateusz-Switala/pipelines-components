@@ -269,7 +269,7 @@ class TestAutogluonModelsTrainingUnitTests:
         ["classification_notebook.ipynb", "regression_notebook.ipynb", "timeseries_notebook.ipynb"],
     )
     def test_notebook_template_documents_custom_pip_index(self, template_name):
-        """Templates must not hard-code an index URL for AutoGluon installation."""
+        """Templates must direct AutoGluon installation to one trusted package index."""
         notebook = json.loads((_NOTEBOOK_TEMPLATES_DIR / template_name).read_text(encoding="utf-8"))
         install_cells = [
             cell
@@ -282,7 +282,9 @@ class TestAutogluonModelsTrainingUnitTests:
         assert any(
             cell["cell_type"] == "markdown"
             and "Custom package index" in "".join(cell["source"])
-            and "PIP_EXTRA_INDEX_URL" in "".join(cell["source"])
+            and "PIP_INDEX_URL" in "".join(cell["source"])
+            and "only if your environment does not already provide it" in "".join(cell["source"])
+            and "PIP_EXTRA_INDEX_URL" not in "".join(cell["source"])
             for cell in notebook["cells"]
         )
 
