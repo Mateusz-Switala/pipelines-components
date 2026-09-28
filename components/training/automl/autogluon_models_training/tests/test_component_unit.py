@@ -268,7 +268,7 @@ class TestAutogluonModelsTrainingUnitTests:
         "template_name",
         ["classification_notebook.ipynb", "regression_notebook.ipynb", "timeseries_notebook.ipynb"],
     )
-    def test_notebook_template_documents_custom_pip_index(self, template_name):
+    def test_notebook_template_documents_release_pip_index(self, template_name):
         """Templates must direct AutoGluon installation to one trusted package index."""
         notebook = json.loads((_NOTEBOOK_TEMPLATES_DIR / template_name).read_text(encoding="utf-8"))
         install_cells = [
@@ -281,9 +281,14 @@ class TestAutogluonModelsTrainingUnitTests:
         assert "PIP_EXTRA_INDEX_URL" not in "".join(install_cells[0]["source"])
         assert any(
             cell["cell_type"] == "markdown"
-            and "Custom package index" in "".join(cell["source"])
+            and "Package index" in "".join(cell["source"])
+            and "AutoGluon 1.5.0+rhaiv.7" in "".join(cell["source"])
             and "PIP_INDEX_URL" in "".join(cell["source"])
-            and "only if your environment does not already provide it" in "".join(cell["source"])
+            and "For Red Hat OpenShift AI 3.6," in "".join(cell["source"])
+            and "Red Hat package index" in "".join(cell["source"])
+            and "%env PIP_INDEX_URL=https://console.redhat.com/api/pypi/public-rhai/rhoai/3.6/cpu-ubi9-test/simple/"
+            in "".join(cell["source"])
+            and "only if your environment does not already provide this index" in "".join(cell["source"])
             and "PIP_EXTRA_INDEX_URL" not in "".join(cell["source"])
             for cell in notebook["cells"]
         )
