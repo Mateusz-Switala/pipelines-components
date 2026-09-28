@@ -709,7 +709,7 @@ class TestPresetWarmStartConfiguration:
         assert gam_call_kwargs["warm_start_strategy"] == "greedy"
         assert gam_call_kwargs.get("fields_to_balance") is None
         assert gam_call_kwargs["max_evals"] == 22
-        assert gam_call_kwargs["max_iterations"] == 8
+        assert gam_call_kwargs["max_iterations"] == 5
 
     @mock.patch.dict("os.environ", MOCKED_ENV_VARIABLES, clear=True)
     def test_balanced_preset_uses_balanced_warm_start(self, tmp_path):
@@ -721,6 +721,7 @@ class TestPresetWarmStartConfiguration:
         assert gam_call_kwargs["warm_start_strategy"] == "balanced"
         assert gam_call_kwargs["fields_to_balance"] == ["foundation_model", "embedding_model", "chunking_method"]
         assert gam_call_kwargs["max_evals"] == 22
+        assert gam_call_kwargs["max_iterations"] == 5
 
     @mock.patch.dict("os.environ", MOCKED_ENV_VARIABLES, clear=True)
     def test_preset_speed_with_3_embeddings_and_2_llm_models(self, tmp_path):

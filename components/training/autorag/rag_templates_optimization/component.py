@@ -60,7 +60,7 @@ def rag_templates_optimization(
         component_status: Output artifact containing stage-level progress tracking.
         embedded_artifact: Embedded ``autorag.shared`` helpers injected by KFP at runtime.
         optimization_settings: Additional experiment settings. The
-            ``max_number_of_rag_patterns`` setting (4-10, default 8) limits
+            ``max_number_of_rag_patterns`` setting (4-10, default 5) limits
             optimization iterations and published patterns.
         input_data_keys: Paths to documents dirs within bucket, 1-10 of them. The full list
             is propagated both to the generated indexing notebook and to the indexing
@@ -105,7 +105,7 @@ def rag_templates_optimization(
 
     DEFAULT_METRIC = Metrics.OVERALL_SCORE.name
 
-    DEFAULT_MAX_RAG_PATTERNS = 8
+    DEFAULT_MAX_RAG_PATTERNS = 5
     MIN_MAX_RAG_PATTERNS_RANGE = (4, 10)
 
     # custom:overall_score aggregates the outputs of the evaluators enabled for the preset.
