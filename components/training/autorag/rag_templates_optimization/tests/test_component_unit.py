@@ -708,7 +708,7 @@ class TestPresetWarmStartConfiguration:
         gam_call_kwargs = mocks.modules["ai4rag.core.hpo.gam_opt"].GAMOptSettings.call_args.kwargs
         assert gam_call_kwargs["warm_start_strategy"] == "greedy"
         assert gam_call_kwargs.get("fields_to_balance") is None
-        assert gam_call_kwargs["max_evals"] == 16
+        assert gam_call_kwargs["max_evals"] == 22
         assert gam_call_kwargs["max_iterations"] == 8
 
     @mock.patch.dict("os.environ", MOCKED_ENV_VARIABLES, clear=True)
@@ -720,6 +720,7 @@ class TestPresetWarmStartConfiguration:
         gam_call_kwargs = mocks.modules["ai4rag.core.hpo.gam_opt"].GAMOptSettings.call_args.kwargs
         assert gam_call_kwargs["warm_start_strategy"] == "balanced"
         assert gam_call_kwargs["fields_to_balance"] == ["foundation_model", "embedding_model", "chunking_method"]
+        assert gam_call_kwargs["max_evals"] == 22
 
     @mock.patch.dict("os.environ", MOCKED_ENV_VARIABLES, clear=True)
     def test_preset_speed_with_3_embeddings_and_2_llm_models(self, tmp_path):
@@ -750,8 +751,9 @@ class TestPresetWarmStartConfiguration:
         assert len(parameter_calls[1].kwargs["values"]) == 3
 
     @pytest.mark.parametrize("limit", [4, 10])
+    @pytest.mark.parametrize("preset", ["speed", "balanced"])
     @mock.patch.dict("os.environ", MOCKED_ENV_VARIABLES, clear=True)
-    def test_explicit_pattern_limit_caps_output(self, tmp_path, limit):
+    def test_explicit_pattern_limit_caps_output(self, tmp_path, limit, preset):
         """An explicit limit bounds output even when ai4rag reports extra evaluations."""
         mocks = _make_ai4rag_mocks()
         mocks.KFPEventHandler.return_value.patterns = [
@@ -761,12 +763,12 @@ class TestPresetWarmStartConfiguration:
         rag_patterns = self._run_component(
             tmp_path,
             mocks,
-            preset="speed",
+            preset=preset,
             optimization_settings={"max_number_of_rag_patterns": str(limit)},
         )
 
         gam_call_kwargs = mocks.modules["ai4rag.core.hpo.gam_opt"].GAMOptSettings.call_args.kwargs
-        assert gam_call_kwargs["max_evals"] == 2 * limit
+        assert gam_call_kwargs["max_evals"] == 22
         assert gam_call_kwargs["max_iterations"] == limit
         assert len(rag_patterns.metadata["metadata"]["patterns"]) == limit
         assert len(list(Path(rag_patterns.path).glob("*/pattern.json"))) == limit

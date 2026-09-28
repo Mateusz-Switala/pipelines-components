@@ -59,7 +59,9 @@ def rag_templates_optimization(
             empty placeholder.
         component_status: Output artifact containing stage-level progress tracking.
         embedded_artifact: Embedded ``autorag.shared`` helpers injected by KFP at runtime.
-        optimization_settings: Additional experiment settings.
+        optimization_settings: Additional experiment settings. The
+            ``max_number_of_rag_patterns`` setting (4-10, default 8) limits
+            optimization iterations and published patterns.
         input_data_keys: Paths to documents dirs within bucket, 1-10 of them. The full list
             is propagated both to the generated indexing notebook and to the indexing
             pipeline blueprint, so either route reingests the same corpus.
@@ -419,8 +421,11 @@ def rag_templates_optimization(
 
             # --- Configure experiment ---
             max_rag_patterns = settings["max_number_of_rag_patterns"]
+            # In the worst balanced-preset case, 3 embedding models, 2 LLMs, and
+            # 2 chunking methods require 12 warm-start evaluations. Reserve the
+            # maximum allowed number of RAG patterns (10) beyond those evaluations.
             optimizer_settings = GAMOptSettings(
-                max_evals=2 * max_rag_patterns,
+                max_evals=12 + MIN_MAX_RAG_PATTERNS_RANGE[1],
                 max_iterations=max_rag_patterns,
                 warm_start_strategy=preset_cfg["warm_start_strategy"],
                 fields_to_balance=preset_cfg.get("fields_to_balance"),
