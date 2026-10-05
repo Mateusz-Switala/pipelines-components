@@ -118,6 +118,7 @@ pipeline-requirements:
 		$(if $(filter true,$(NO_UPGRADE)),--no-upgrade,) \
 		$(if $(filter true,$(DRY_RUN)),--dry-run,) \
 		$(if $(filter true,$(QUIET)),--quiet,) \
+		$(if $(filter true,$(LEGACY_RESOLVER)),--legacy-resolver,) \
 		$${RUNTIME:+--runtime "$$RUNTIME"} \
 		$${IMAGE:+--image "$$IMAGE"} \
 		$${PIPELINE:+"$$PIPELINE"}
