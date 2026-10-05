@@ -41,6 +41,7 @@ _INDEX_URL_RE = re.compile(r"^--index-url\s+(\S+)", re.MULTILINE)
 _PKG_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*")
 _REQUIREMENTS_IN = "requirements.in"
 _REQUIREMENTS_TXT = "requirements.txt"
+_REQUIREMENTS_OVERRIDE = "requirements.override.txt"
 
 
 class RefreshRequirementsError(Exception):
@@ -216,16 +217,21 @@ def build_container_command(
     upgrade: bool,
     dry_run: bool,
     verbose: bool,
+    legacy_resolver: bool = False,
 ) -> list[str]:
-    """Build the container command that runs uv pip compile."""
+    """Build the container command that compiles requirements."""
     python_bin = "python3 -u"
+    compile_bin = f"{python_bin} -m uv pip compile"
+    pip_install = f"{python_bin} -m pip install uv" if verbose else f"{python_bin} -m pip install --quiet uv"
     compile_flags = [
-        f"{python_bin} -m uv pip compile",
+        compile_bin,
         _REQUIREMENTS_IN,
         "--generate-hashes",
         "--emit-index-url",
         "--no-header",
     ]
+    if legacy_resolver:
+        compile_flags.extend(["--overrides", _REQUIREMENTS_OVERRIDE])
     # uv pip compile has no --dry-run; emit to stdout instead of writing the lockfile.
     if not dry_run:
         compile_flags.append(f"--output-file {_REQUIREMENTS_TXT}")
@@ -234,7 +240,6 @@ def build_container_command(
     if not verbose:
         compile_flags.append("--quiet")
 
-    pip_install = f"{python_bin} -m pip install uv" if verbose else f"{python_bin} -m pip install --quiet uv"
     compile_command = " ".join([pip_install, "&&", " ".join(compile_flags)])
 
     command = [
@@ -258,12 +263,15 @@ def compile_pipeline_requirements(
     upgrade: bool = True,
     dry_run: bool = False,
     verbose: bool = True,
+    legacy_resolver: bool = False,
 ) -> None:
     """Compile ``requirements.in`` to ``requirements.txt`` for one pipeline."""
     requirements_in = pipeline_dir / _REQUIREMENTS_IN
     index_url = read_index_url(requirements_in)
     if index_url is None:
         raise RefreshRequirementsError(f"{requirements_in} must declare --index-url for RHOAI package resolution")
+    if legacy_resolver and not (pipeline_dir / _REQUIREMENTS_OVERRIDE).is_file():
+        raise RefreshRequirementsError(f"{pipeline_dir / _REQUIREMENTS_OVERRIDE} is required with --legacy-resolver")
 
     runtime = resolve_container_runtime(container_runtime)
     command = build_container_command(
@@ -273,6 +281,7 @@ def compile_pipeline_requirements(
         upgrade=upgrade,
         dry_run=dry_run,
         verbose=verbose,
+        legacy_resolver=legacy_resolver,
     )
 
     print(f"Refreshing {pipeline_dir / _REQUIREMENTS_TXT}")
@@ -298,6 +307,7 @@ def refresh_pipeline_requirements(
     upgrade: bool = True,
     dry_run: bool = False,
     verbose: bool = True,
+    legacy_resolver: bool = False,
 ) -> None:
     """Refresh requirements.txt for all given pipeline directories."""
     if repo_root is None:
@@ -312,6 +322,7 @@ def refresh_pipeline_requirements(
             upgrade=upgrade,
             dry_run=dry_run,
             verbose=verbose,
+            legacy_resolver=legacy_resolver,
         )
 
 
@@ -352,6 +363,11 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Suppress live uv pip compile progress output",
     )
+    parser.add_argument(
+        "--legacy-resolver",
+        action="store_true",
+        help="Apply requirements.override.txt to retain incompatible direct pins, like classic pip.",
+    )
     return parser.parse_args(argv)
 
 
@@ -368,6 +384,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             upgrade=not args.no_upgrade,
             dry_run=args.dry_run,
             verbose=not args.quiet,
+            legacy_resolver=args.legacy_resolver,
         )
     except (RefreshRequirementsError, subprocess.CalledProcessError, FileNotFoundError) as exc:
         print(f"error: {exc}", file=sys.stderr)

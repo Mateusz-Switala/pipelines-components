@@ -347,6 +347,27 @@ class TestBuildContainerCommand:
         assert "--upgrade" in command[-1]
         assert "--output-file" not in command[-1]
 
+    def test_legacy_resolver_uses_requirements_override(self, tmp_path: Path):
+        """Applies an explicit override when incompatible direct pins are intentional."""
+        pipeline_dir = tmp_path / "pipeline"
+        _write_requirements_in(pipeline_dir)
+        (pipeline_dir / "requirements.override.txt").write_text("requests==2.0.0\n", encoding="utf-8")
+
+        command = build_container_command(
+            runtime="podman",
+            container_image="registry.example.com/ubi9/python-312:9.8",
+            pipeline_dir=pipeline_dir.resolve(),
+            upgrade=True,
+            dry_run=False,
+            verbose=True,
+            legacy_resolver=True,
+        )
+
+        compile_command = command[command.index("-lc") + 1]
+        assert "python3 -u -m pip install uv" in compile_command
+        assert "python3 -u -m uv pip compile requirements.in" in compile_command
+        assert "--overrides requirements.override.txt" in compile_command
+
 
 class TestCompilePipelineRequirements:
     """Tests for compile_pipeline_requirements."""

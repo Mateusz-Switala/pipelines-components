@@ -40,6 +40,12 @@ Suppress live progress output:
 make pipeline-requirements QUIET=true
 ```
 
+Use an explicit dependency override to retain an intentionally incompatible direct pin, like classic pip:
+
+```bash
+make pipeline-requirements PIPELINE=pipelines/training/autorag/documents_rag_optimization_pipeline LEGACY_RESOLVER=true
+```
+
 Use a specific container runtime:
 
 ```bash
@@ -63,6 +69,7 @@ uv run python -m scripts.refresh_pipeline_requirements.refresh_pipeline_requirem
 | `NO_UPGRADE` | `true` | Keep existing pins from `requirements.txt` |
 | `DRY_RUN` | `true` | Show changes without writing `requirements.txt` |
 | `QUIET` | `true` | Suppress live uv pip compile progress output |
+| `LEGACY_RESOLVER` | `true` | Apply `requirements.override.txt` to retain incompatible direct pins |
 
 ## Defaults
 
