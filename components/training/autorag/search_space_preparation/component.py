@@ -60,6 +60,7 @@ def search_space_preparation(
 
     import pandas as pd
     from ai4rag.search_space.prepare import build_search_space_report, prepare_search_space_with_maas
+    from ai4rag.search_space.src.parameter import Parameter
     from ai4rag.utils.clients import create_maas_client
 
     logging.basicConfig(level=logging.INFO)
@@ -115,6 +116,22 @@ def search_space_preparation(
                 api_key=os.environ["MAAS_API_KEY"],
             )
 
+            if any(k.startswith("MILVUS") for k in os.environ):
+                vector_store_type = "milvus"
+            elif any(k.startswith("PGVECTOR") for k in os.environ):
+                vector_store_type = "pgvector"
+            elif any(k.startswith("NEO4J") for k in os.environ):
+                vector_store_type = "neo4j"
+            else:
+                vector_store_type = "milvus"
+            logging.info("Detected vector store type: %s", vector_store_type)
+
+            # Neo4j: fix chunk geometry so the optimizer focuses on chunking method
+            # and graph versus hybrid search rather than also varying chunk size.
+            if vector_store_type == "neo4j":
+                chunk_sizes = [1024]
+                chunk_overlaps = [0, 64]
+
             payload = {
                 "foundation_models": [{"model_id": gm} for gm in generation_models],
                 "embedding_models": [{"model_id": em} for em in embedding_models],
@@ -130,6 +147,9 @@ def search_space_preparation(
                 client=maas_client,
                 benchmark_data=benchmark_df,
             )
+            if vector_store_type == "neo4j":
+                # Neo4j uses graph retrieval, seeded by the shared Chunk vector index.
+                search_space["search_mode"] = Parameter(name="search_mode", values=("graph",))
 
             build_search_space_report(search_space).save_json(search_space_report.path)
 

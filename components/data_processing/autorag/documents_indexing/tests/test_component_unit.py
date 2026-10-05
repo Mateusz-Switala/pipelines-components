@@ -71,6 +71,10 @@ def _make_ai4rag_mocks():
         "ai4rag.rag.embedding.openai_model": _make_module_mock(
             OpenAIEmbeddingModel=mock_OpenAIEmbeddingModel, OpenAIEmbeddingParams=mock_OpenAIEmbeddingParams
         ),
+        "ai4rag.rag.foundation_models": mock.MagicMock(),
+        "ai4rag.rag.foundation_models.openai_model": _make_module_mock(
+            OpenAIFoundationModel=mock.MagicMock(name="OpenAIFoundationModel")
+        ),
         "ai4rag.rag.vector_store": _make_module_mock(
             get_vector_store=mock_get_vector_store, get_vector_store_config=mock_get_vector_store_config
         ),
@@ -87,6 +91,7 @@ def _make_ai4rag_mocks():
         "LangChainChunker": mock_LangChainChunker,
         "OpenAIEmbeddingModel": mock_OpenAIEmbeddingModel,
         "OpenAIEmbeddingParams": mock_OpenAIEmbeddingParams,
+        "OpenAIFoundationModel": modules["ai4rag.rag.foundation_models.openai_model"].OpenAIFoundationModel,
         "get_vector_store": mock_get_vector_store,
         "get_vector_store_config": mock_get_vector_store_config,
         "vector_store": mock_store,
@@ -295,6 +300,23 @@ class TestDocumentsIndexingProcessing:
         _call_component(tmp_path, modules, mocks, filenames=["a.json"])
         mocks["get_vector_store_config"].assert_called_once_with("pgvector")
 
+    @mock.patch.dict(
+        "os.environ",
+        {
+            "MAAS_BASE_URL": "https://maas.example.com/v1",
+            "MAAS_API_KEY": "test-api-key",
+            "NEO4J_URI": "neo4j://neo4j.example.com:7687",
+            "NEO4J_PASSWORD": "s3cr3t",
+        },
+        clear=True,
+    )
+    def test_neo4j_provider_detected_from_env(self, tmp_path):
+        """NEO4J_* env vars select the neo4j backend when no MILVUS_* or PGVECTOR_* keys are set."""
+        modules, mocks = _make_ai4rag_mocks()
+        mocks["LangChainChunker"].return_value.split_documents.return_value = []
+        _call_component(tmp_path, modules, mocks, filenames=["a.json"])
+        mocks["get_vector_store_config"].assert_called_once_with("neo4j")
+
     @mock.patch.dict("os.environ", MOCKED_ENV_VARIABLES, clear=True)
     def test_recursive_chunker_selected(self, tmp_path):
         """chunking_method='recursive' instantiates LangChainChunker."""
@@ -424,6 +446,29 @@ class TestDocumentsIndexingProcessing:
         _call_component(tmp_path, modules, mocks, filenames=["a.json"], collection_name=None)
         call_kwargs = mocks["get_vector_store"].call_args.kwargs
         assert call_kwargs["collection_name"] is None
+
+    @mock.patch.dict(
+        "os.environ",
+        {
+            "MAAS_BASE_URL": "https://maas.example.com/v1",
+            "MAAS_API_KEY": "test-api-key",
+            "NEO4J_URI": "neo4j://host:7687",
+            "NEO4J_PASSWORD": "secret",
+        },
+        clear=True,
+    )
+    def test_neo4j_gets_foundation_model_for_graph_indexing(self, tmp_path):
+        """A graph-mode blueprint rebuilds Neo4j entities with its selected model."""
+        modules, mocks = _make_ai4rag_mocks()
+        _call_component(tmp_path, modules, mocks, filenames=["a.json"], foundation_model_id="fm-0")
+
+        mocks["OpenAIFoundationModel"].assert_called_once_with(
+            client=mocks["create_maas_client"].return_value, model_id="fm-0"
+        )
+        assert (
+            mocks["get_vector_store"].call_args.kwargs["foundation_model"]
+            is mocks["OpenAIFoundationModel"].return_value
+        )
 
     @mock.patch.dict("os.environ", MOCKED_ENV_VARIABLES, clear=True)
     def test_default_parameters(self, tmp_path):
