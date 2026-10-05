@@ -453,7 +453,7 @@ def rag_templates_optimization(
             output_dir.mkdir(parents=True, exist_ok=True)
 
             patterns = _generate_output_artifacts(
-                patterns_raw=event_handler.patterns[:max_rag_patterns],
+                patterns_raw=event_handler.patterns,
                 output_dir=output_dir,
                 input_data_keys=input_data_keys or [],
                 test_data_key=test_data_key,

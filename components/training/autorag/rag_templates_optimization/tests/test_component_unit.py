@@ -754,8 +754,8 @@ class TestPresetWarmStartConfiguration:
     @pytest.mark.parametrize("limit", [4, 10])
     @pytest.mark.parametrize("preset", ["speed", "balanced"])
     @mock.patch.dict("os.environ", MOCKED_ENV_VARIABLES, clear=True)
-    def test_explicit_pattern_limit_caps_output(self, tmp_path, limit, preset):
-        """An explicit limit bounds output even when ai4rag reports extra evaluations."""
+    def test_publishes_all_event_handler_patterns(self, tmp_path, limit, preset):
+        """All patterns published by ai4rag are written to the component outputs."""
         mocks = _make_ai4rag_mocks()
         mocks.KFPEventHandler.return_value.patterns = [
             {"payload": _pattern_payload(f"pattern_{index}"), "evaluation_results": []} for index in range(limit + 1)
@@ -771,5 +771,5 @@ class TestPresetWarmStartConfiguration:
         gam_call_kwargs = mocks.modules["ai4rag.core.hpo.gam_opt"].GAMOptSettings.call_args.kwargs
         assert gam_call_kwargs["max_evals"] == 22
         assert gam_call_kwargs["max_iterations"] == limit
-        assert len(rag_patterns.metadata["metadata"]["patterns"]) == limit
-        assert len(list(Path(rag_patterns.path).glob("*/pattern.json"))) == limit
+        assert len(rag_patterns.metadata["metadata"]["patterns"]) == limit + 1
+        assert len(list(Path(rag_patterns.path).glob("*/pattern.json"))) == limit + 1
