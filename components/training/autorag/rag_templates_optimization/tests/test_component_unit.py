@@ -644,10 +644,15 @@ class TestRagTemplatesOptimizationRun:
         clear=True,
     )
     def test_neo4j_provider_detected_from_env(self, tmp_path):
-        """NEO4J_* env vars select the neo4j backend when no MILVUS_* or PGVECTOR_* keys are set."""
+        """Neo4j patterns use graph notebooks when no MILVUS_* or PGVECTOR_* keys are set."""
         mocks = _make_ai4rag_mocks()
         mocks.create_maas_client.return_value = mock.MagicMock()
         search_space_path = _write_search_space_report(tmp_path)
+        neo4j_pattern = _pattern_payload("pattern_a")
+        neo4j_pattern["settings"]["store_binding"]["provider_type"] = "neo4j"
+        mocks.KFPEventHandler.return_value.patterns = [
+            {"payload": neo4j_pattern, "evaluation_results": []},
+        ]
         rag_patterns, leaderboard_html = _artifacts(tmp_path)
 
         with mock.patch.dict("sys.modules", mocks.modules):
@@ -665,6 +670,10 @@ class TestRagTemplatesOptimizationRun:
             )
 
         mocks.get_vector_store_config.assert_called_once_with("neo4j")
+        assert [call.args[0] for call in mocks.generate_notebook_from_template.call_args_list] == [
+            "mass_creating_knowledge_graph",
+            "mass_inference_knowledge_graph",
+        ]
 
     def test_missing_vector_db_env_raises_value_error(self, tmp_path):
         """Absent MILVUS_*/PGVECTOR_* env vars raise a descriptive ValueError."""

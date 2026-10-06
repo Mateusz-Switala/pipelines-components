@@ -270,15 +270,27 @@ def rag_templates_optimization(
                     }
                 }
 
+            # Neo4j patterns build and query a knowledge graph, rather than a
+            # plain embedding index.  Their notebooks therefore need the graph
+            # construction and graph-retrieval flows; other providers retain
+            # the standard MaaS notebook pair.
+            is_knowledge_graph_pattern = store_binding["provider_type"] == "neo4j"
+            indexing_notebook_template = (
+                "mass_creating_knowledge_graph" if is_knowledge_graph_pattern else "maas_indexing"
+            )
+            inference_notebook_template = (
+                "mass_inference_knowledge_graph" if is_knowledge_graph_pattern else "maas_inference"
+            )
+
             generate_notebook_from_template(
-                "maas_indexing",
+                indexing_notebook_template,
                 pattern_data,
                 patt_dir / "indexing.ipynb",
                 input_data_keys=input_data_keys,
                 test_data_key=test_data_key,
             )
             generate_notebook_from_template(
-                "maas_inference",
+                inference_notebook_template,
                 pattern_data,
                 patt_dir / "inference.ipynb",
                 test_data_key=test_data_key,
