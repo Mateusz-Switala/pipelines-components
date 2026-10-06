@@ -304,7 +304,7 @@ class TestSearchSpacePreparationUnitTests:
 
     @pytest.mark.parametrize("preset_value", ["speed", "balanced"])
     def test_neo4j_delegates_backend_defaults_to_ai4rag(self, tmp_path, preset_value):
-        """Neo4j passes its backend type to ai4rag for compatible defaults."""
+        """Neo4j preserves ai4rag chunk defaults regardless of preset."""
         m = _make_ai4rag_mocks()
         m.create_maas_client.return_value = mock.MagicMock()
         m.prepare.return_value = mock.MagicMock()
@@ -334,6 +334,8 @@ class TestSearchSpacePreparationUnitTests:
         assert m.prepare.call_args.kwargs["vector_store_type"] == "neo4j"
         expected_methods = ["recursive"] if preset_value == "speed" else ["recursive", "hybrid"]
         assert payload["chunking_methods"] == expected_methods
+        assert "chunk_sizes" not in payload
+        assert "chunk_overlaps" not in payload
 
     @pytest.mark.parametrize(("code", "expected"), [("en", "en"), ("ZH", "zh"), (" pl ", "pl")])
     def test_detected_language_is_returned_normalized(self, tmp_path, code, expected):
