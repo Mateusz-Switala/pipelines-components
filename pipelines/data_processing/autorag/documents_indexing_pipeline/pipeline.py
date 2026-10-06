@@ -49,7 +49,8 @@ def documents_indexing_pipeline(
         db_secret_name: Name of the secret carrying the database
             configuration. The env-var prefix selects the backend: ``MILVUS_*`` keys
             (at least ``MILVUS_URI``) select Milvus, ``PGVECTOR_*`` keys select PGVector,
-            and ``NEO4J_*`` keys select Neo4j.
+            and ``NEO4J_*`` keys select Neo4j. ``NEO4J_CA_CERT`` optionally supplies a
+            private CA certificate for Neo4j TLS.
         embedding_model_id: Embedding model ID served by MaaS.
         input_data_secret_name: Name of the secret with S3 credentials for input data
             ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_S3_ENDPOINT", "AWS_DEFAULT_REGION").
@@ -159,6 +160,7 @@ def documents_indexing_pipeline(
             "NEO4J_USERNAME": "NEO4J_USERNAME",
             "NEO4J_PASSWORD": "NEO4J_PASSWORD",
             "NEO4J_DATABASE": "NEO4J_DATABASE",
+            "NEO4J_CA_CERT": "NEO4J_CA_CERT",
         },
         optional=True,
     )

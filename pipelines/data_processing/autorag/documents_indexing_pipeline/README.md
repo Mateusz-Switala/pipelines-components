@@ -13,7 +13,7 @@ Discovers documents from object storage, extracts text, and indexes chunks into 
 | Parameter | Type | Default | Description |
 | --------- | ---- | ------- | ----------- |
 | `maas_secret_name` | `str` | `None` | Name of the secret with MaaS inference credentials ("MAAS_BASE_URL", "MAAS_API_KEY"). |
-| `db_secret_name` | `str` | `None` | Name of the secret carrying the database configuration. The env-var prefix selects the backend: ``MILVUS_*`` keys (at least ``MILVUS_URI``) select Milvus, ``PGVECTOR_*`` keys select PGVector, and ``NEO4J_*`` keys select Neo4j. |
+| `db_secret_name` | `str` | `None` | Name of the secret carrying the database configuration. The env-var prefix selects the backend: ``MILVUS_*`` keys (at least ``MILVUS_URI``) select Milvus, ``PGVECTOR_*`` keys select PGVector, and ``NEO4J_*`` keys select Neo4j. ``NEO4J_CA_CERT`` optionally supplies a private CA certificate for Neo4j TLS. |
 | `embedding_model_id` | `str` | `None` | Embedding model ID served by MaaS. |
 | `input_data_secret_name` | `str` | `None` | Name of the secret with S3 credentials for input data ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_S3_ENDPOINT", "AWS_DEFAULT_REGION"). |
 | `input_data_bucket_name` | `str` | `None` | Name of the S3 bucket containing input data. |
@@ -50,7 +50,7 @@ Discovers documents from object storage, extracts text, and indexes chunks into 
   - documents_discovery
   - data_indexing
   - autorag
-- **Last Verified**: 2026-09-15 00:00:00+00:00
+- **Last Verified**: 2026-10-06 00:00:00+00:00
 - **Owners**:
   - No Parent Owners: Yes
   - Approvers:

@@ -136,6 +136,7 @@ class TestDocumentsIndexingPipelineUnit:
         assert "MILVUS_URI" in content
         assert "PGVECTOR_HOST" in content
         assert "NEO4J_URI" in content
+        assert "NEO4J_CA_CERT" in content
 
     def test_compiled_pipeline_declares_component_resource_tiers(self):
         """All indexing pipeline steps declare the workload CPU/memory tier."""
