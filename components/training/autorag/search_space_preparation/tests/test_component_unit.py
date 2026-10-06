@@ -27,8 +27,6 @@ def _make_ai4rag_mocks() -> SimpleNamespace:
     create_maas_client = mock.MagicMock(name="create_maas_client")
     prepare_search_space_with_maas = mock.MagicMock(name="prepare_search_space_with_maas")
     build_search_space_report = mock.MagicMock(name="build_search_space_report")
-    parameter = mock.MagicMock(name="Parameter")
-
     utils = mock.MagicMock()
     utils.create_maas_client = create_maas_client
 
@@ -36,16 +34,11 @@ def _make_ai4rag_mocks() -> SimpleNamespace:
     prepare_module.prepare_search_space_with_maas = prepare_search_space_with_maas
     prepare_module.build_search_space_report = build_search_space_report
 
-    parameter_module = mock.MagicMock()
-    parameter_module.Parameter = parameter
-
     modules = {
         "ai4rag": mock.MagicMock(),
         "ai4rag.utils.clients": utils,
         "ai4rag.search_space": mock.MagicMock(),
         "ai4rag.search_space.prepare": prepare_module,
-        "ai4rag.search_space.src": mock.MagicMock(),
-        "ai4rag.search_space.src.parameter": parameter_module,
         "ai4rag.utils": mock.MagicMock(),
         "pandas": mock.MagicMock(name="pandas"),
     }
@@ -54,7 +47,6 @@ def _make_ai4rag_mocks() -> SimpleNamespace:
         create_maas_client=create_maas_client,
         prepare=prepare_search_space_with_maas,
         build=build_search_space_report,
-        Parameter=parameter,
     )
 
 
@@ -123,7 +115,7 @@ class TestSearchSpacePreparationUnitTests:
         assert payload["chunking_methods"] == ["recursive"]
         assert m.prepare.call_args.kwargs["client"] is client
         assert "benchmark_data" in m.prepare.call_args.kwargs
-        assert "vector_store_type" not in m.prepare.call_args.kwargs
+        assert m.prepare.call_args.kwargs["vector_store_type"] == "milvus"
 
         m.build.assert_called_once_with(search_space)
         report.save_json.assert_called_once_with(str(tmp_path / "report.json"))
@@ -220,16 +212,16 @@ class TestSearchSpacePreparationUnitTests:
                 )
 
     @pytest.mark.parametrize(
-        "env_vars",
+        ("env_vars", "expected_vector_store_type"),
         [
-            {"MILVUS_URI": "http://milvus:19530"},
-            {"PGVECTOR_HOST": "pg-host"},
-            {"NEO4J_URI": "neo4j://neo4j:7687", "NEO4J_PASSWORD": "s3cr3t"},
-            {},
+            ({"MILVUS_URI": "http://milvus:19530"}, "milvus"),
+            ({"PGVECTOR_HOST": "pg-host"}, "pgvector"),
+            ({"NEO4J_URI": "neo4j://neo4j:7687", "NEO4J_PASSWORD": "s3cr3t"}, "neo4j"),
+            ({}, "milvus"),
         ],
     )
-    def test_vector_db_env_is_accepted(self, tmp_path, env_vars):
-        """All supported vector database environment configurations are accepted."""
+    def test_vector_db_env_selects_ai4rag_backend(self, tmp_path, env_vars, expected_vector_store_type):
+        """All supported vector database environment configurations select their ai4rag backend."""
         m = _make_ai4rag_mocks()
         m.create_maas_client.return_value = mock.MagicMock()
         m.prepare.return_value = mock.MagicMock()
@@ -250,7 +242,7 @@ class TestSearchSpacePreparationUnitTests:
                     generation_models=["gen-1"],
                 )
 
-        assert "vector_store_type" not in m.prepare.call_args.kwargs
+        assert m.prepare.call_args.kwargs["vector_store_type"] == expected_vector_store_type
 
     @pytest.mark.parametrize(
         ("preset_value", "expected_chunking", "expected_chunk_sizes", "expected_chunk_overlaps"),
@@ -311,8 +303,8 @@ class TestSearchSpacePreparationUnitTests:
         return result.detected_ocr_lang
 
     @pytest.mark.parametrize("preset_value", ["speed", "balanced"])
-    def test_neo4j_fixes_chunk_size_and_overlap(self, tmp_path, preset_value):
-        """Neo4j fixes chunk size and supplies overlaps valid for both chunkers."""
+    def test_neo4j_delegates_backend_defaults_to_ai4rag(self, tmp_path, preset_value):
+        """Neo4j passes its backend type to ai4rag for compatible defaults."""
         m = _make_ai4rag_mocks()
         m.create_maas_client.return_value = mock.MagicMock()
         m.prepare.return_value = mock.MagicMock()
@@ -339,10 +331,7 @@ class TestSearchSpacePreparationUnitTests:
                 )
 
         payload = m.prepare.call_args.args[0]
-        assert payload["chunk_sizes"] == [1024], "chunk_size must be fixed at 1024 for neo4j"
-        assert payload["chunk_overlaps"] == [0, 64]
-        m.Parameter.assert_called_once_with(name="search_mode", values=("graph",))
-        m.prepare.return_value.__setitem__.assert_called_once_with("search_mode", m.Parameter.return_value)
+        assert m.prepare.call_args.kwargs["vector_store_type"] == "neo4j"
         expected_methods = ["recursive"] if preset_value == "speed" else ["recursive", "hybrid"]
         assert payload["chunking_methods"] == expected_methods
 

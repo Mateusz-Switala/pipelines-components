@@ -65,7 +65,7 @@ def models_pre_selector(
     logging.basicConfig(level=logging.INFO)
 
     VALID_PRESETS = {"speed", "balanced"}
-    PRESET_INFERENCE_MAX_THREADS = {"speed": 4, "balanced": 4}
+    PRESET_INFERENCE_MAX_THREADS = {"speed": 10, "balanced": 4}
     SAMPLE_SIZE = 5
     RANDOM_SEED = 17
 
