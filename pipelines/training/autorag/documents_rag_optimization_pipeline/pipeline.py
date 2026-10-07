@@ -65,7 +65,7 @@ def documents_rag_optimization_pipeline(
     settings based on an upfront-specified quality metric.
 
     The system integrates with MaaS (Models-as-a-Service) for inference and a vector database
-    (Milvus or PGVector) for retrieval, producing optimized RAG patterns as artifacts that can
+    (Milvus, PGVector, or Neo4j) for retrieval, producing optimized RAG patterns as artifacts that can
     be deployed and used for production RAG applications. Each optimized pattern contains a
     ``pattern.json`` (with deployment settings), executable notebooks, and evaluation results.
 

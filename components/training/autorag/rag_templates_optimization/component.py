@@ -478,11 +478,11 @@ def rag_templates_optimization(
                 api_key=os.environ["MAAS_API_KEY"],
             )
 
-            if any(k.startswith("MILVUS") for k in os.environ):
+            if "MILVUS_URI" in os.environ:
                 provider = "milvus"
-            elif any(k.startswith("PGVECTOR") for k in os.environ):
+            elif "PGVECTOR_HOST" in os.environ:
                 provider = "pgvector"
-            elif any(k.startswith("NEO4J") for k in os.environ):
+            elif "NEO4J_URI" in os.environ:
                 provider = "neo4j"
             else:
                 raise ValueError(

@@ -257,7 +257,11 @@ class TestDocumentsIndexingValidation:
     def test_missing_vector_db_env_raises_value_error(self, tmp_path):
         """Absent MILVUS_*/PGVECTOR_* env vars raise a descriptive ValueError."""
         modules, mocks = _make_ai4rag_mocks()
-        maas_only = {"MAAS_BASE_URL": "https://maas.example.com/v1", "MAAS_API_KEY": "test-api-key"}
+        maas_only = {
+            "MAAS_BASE_URL": "https://maas.example.com/v1",
+            "MAAS_API_KEY": "test-api-key",
+            "NEO4J_HOME": "/opt/neo4j",
+        }
         with mock.patch.dict("os.environ", maas_only, clear=True):
             with mock.patch.dict("sys.modules", modules):
                 with pytest.raises(ValueError, match="No vector database configuration found"):
@@ -460,7 +464,14 @@ class TestDocumentsIndexingProcessing:
     def test_neo4j_gets_foundation_model_for_graph_indexing(self, tmp_path):
         """A graph-mode blueprint rebuilds Neo4j entities with its selected model."""
         modules, mocks = _make_ai4rag_mocks()
-        _call_component(tmp_path, modules, mocks, filenames=["a.json"], foundation_model_id="fm-0")
+        _call_component(
+            tmp_path,
+            modules,
+            mocks,
+            filenames=["a.json"],
+            foundation_model_id="fm-0",
+            kg_extraction_config={"mode": "constrained"},
+        )
 
         mocks["OpenAIFoundationModel"].assert_called_once_with(
             client=mocks["create_maas_client"].return_value, model_id="fm-0"
@@ -469,6 +480,50 @@ class TestDocumentsIndexingProcessing:
             mocks["get_vector_store"].call_args.kwargs["foundation_model"]
             is mocks["OpenAIFoundationModel"].return_value
         )
+
+    @mock.patch.dict(
+        "os.environ",
+        {
+            "MAAS_BASE_URL": "https://maas.example.com/v1",
+            "MAAS_API_KEY": "test-api-key",
+            "NEO4J_URI": "neo4j://host:7687",
+            "NEO4J_PASSWORD": "secret",
+        },
+        clear=True,
+    )
+    def test_neo4j_graph_extraction_requires_foundation_model(self, tmp_path):
+        """Configured Neo4j graph extraction cannot silently run without an LLM."""
+        modules, mocks = _make_ai4rag_mocks()
+
+        with pytest.raises(ValueError, match="foundation_model_id is required"):
+            _call_component(
+                tmp_path,
+                modules,
+                mocks,
+                filenames=["a.json"],
+                kg_extraction_config={"mode": "constrained"},
+            )
+
+        mocks["OpenAIFoundationModel"].assert_not_called()
+        mocks["get_vector_store"].assert_not_called()
+
+    @mock.patch.dict(
+        "os.environ",
+        {
+            "MAAS_BASE_URL": "https://maas.example.com/v1",
+            "MAAS_API_KEY": "test-api-key",
+            "NEO4J_URI": "neo4j://host:7687",
+            "NEO4J_PASSWORD": "secret",
+        },
+        clear=True,
+    )
+    def test_neo4j_vector_indexing_allows_no_foundation_model(self, tmp_path):
+        """Vector-only Neo4j indexing remains valid without graph extraction settings."""
+        modules, mocks = _make_ai4rag_mocks()
+        _call_component(tmp_path, modules, mocks, filenames=["a.json"])
+
+        mocks["OpenAIFoundationModel"].assert_not_called()
+        assert mocks["get_vector_store"].call_args.kwargs["foundation_model"] is None
 
     @mock.patch.dict("os.environ", MOCKED_ENV_VARIABLES, clear=True)
     def test_default_parameters(self, tmp_path):

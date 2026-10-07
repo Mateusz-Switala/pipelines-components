@@ -105,14 +105,17 @@ def search_space_preparation(
                 api_key=os.environ["MAAS_API_KEY"],
             )
 
-            if any(k.startswith("MILVUS") for k in os.environ):
+            if "MILVUS_URI" in os.environ:
                 vector_store_type = "milvus"
-            elif any(k.startswith("PGVECTOR") for k in os.environ):
+            elif "PGVECTOR_HOST" in os.environ:
                 vector_store_type = "pgvector"
-            elif any(k.startswith("NEO4J") for k in os.environ):
+            elif "NEO4J_URI" in os.environ:
                 vector_store_type = "neo4j"
             else:
                 vector_store_type = "milvus"
+                logging.warning(
+                    "No MILVUS_URI, PGVECTOR_HOST, or NEO4J_URI environment variable found; defaulting to milvus."
+                )
             logging.info("Detected vector store type: %s", vector_store_type)
 
             payload = {

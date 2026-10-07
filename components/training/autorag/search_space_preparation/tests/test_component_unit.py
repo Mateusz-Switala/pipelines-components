@@ -212,16 +212,19 @@ class TestSearchSpacePreparationUnitTests:
                 )
 
     @pytest.mark.parametrize(
-        ("env_vars", "expected_vector_store_type"),
+        ("env_vars", "expected_vector_store_type", "expects_fallback_warning"),
         [
-            ({"MILVUS_URI": "http://milvus:19530"}, "milvus"),
-            ({"PGVECTOR_HOST": "pg-host"}, "pgvector"),
-            ({"NEO4J_URI": "neo4j://neo4j:7687", "NEO4J_PASSWORD": "s3cr3t"}, "neo4j"),
-            ({}, "milvus"),
+            ({"MILVUS_URI": "http://milvus:19530"}, "milvus", False),
+            ({"PGVECTOR_HOST": "pg-host"}, "pgvector", False),
+            ({"NEO4J_URI": "neo4j://neo4j:7687", "NEO4J_PASSWORD": "s3cr3t"}, "neo4j", False),
+            ({}, "milvus", True),
+            ({"NEO4J_HOME": "/opt/neo4j"}, "milvus", True),
         ],
     )
-    def test_vector_db_env_selects_ai4rag_backend(self, tmp_path, env_vars, expected_vector_store_type):
-        """All supported vector database environment configurations select their ai4rag backend."""
+    def test_vector_db_env_selects_ai4rag_backend(
+        self, tmp_path, caplog, env_vars, expected_vector_store_type, expects_fallback_warning
+    ):
+        """Only underscore-qualified database-secret keys select an ai4rag backend."""
         m = _make_ai4rag_mocks()
         m.create_maas_client.return_value = mock.MagicMock()
         m.prepare.return_value = mock.MagicMock()
@@ -243,6 +246,10 @@ class TestSearchSpacePreparationUnitTests:
                 )
 
         assert m.prepare.call_args.kwargs["vector_store_type"] == expected_vector_store_type
+        if expects_fallback_warning:
+            assert "defaulting to milvus" in caplog.text
+        else:
+            assert "defaulting to milvus" not in caplog.text
 
     @pytest.mark.parametrize(
         ("preset_value", "expected_chunking", "expected_chunk_sizes", "expected_chunk_overlaps"),

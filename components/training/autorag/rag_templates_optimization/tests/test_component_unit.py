@@ -690,7 +690,11 @@ class TestRagTemplatesOptimizationRun:
 
         with mock.patch.dict(
             "os.environ",
-            {"MAAS_BASE_URL": "https://maas.example.com/v1", "MAAS_API_KEY": "test-api-key"},
+            {
+                "MAAS_BASE_URL": "https://maas.example.com/v1",
+                "MAAS_API_KEY": "test-api-key",
+                "NEO4J_HOME": "/opt/neo4j",
+            },
             clear=True,
         ):
             with mock.patch.dict("sys.modules", mocks.modules):

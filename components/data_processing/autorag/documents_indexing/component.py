@@ -72,7 +72,8 @@ def documents_indexing(
             ``pattern.json`` ``settings.store_binding.collection_name``).
             Omit to create a new collection.
         kg_extraction_config: Neo4j graph-extraction settings from an optimized
-            pattern. Ignored by other vector stores.
+            pattern. Requires ``foundation_model_id`` when indexing into Neo4j;
+            ignored by other vector stores.
 
     Environment variables (required):
         MAAS_BASE_URL, MAAS_API_KEY for inference. Plus the vector database
@@ -132,11 +133,11 @@ def documents_indexing(
         api_key=os.environ["MAAS_API_KEY"],
     )
 
-    if any(k.startswith("MILVUS") for k in os.environ):
+    if "MILVUS_URI" in os.environ:
         provider = "milvus"
-    elif any(k.startswith("PGVECTOR") for k in os.environ):
+    elif "PGVECTOR_HOST" in os.environ:
         provider = "pgvector"
-    elif any(k.startswith("NEO4J") for k in os.environ):
+    elif "NEO4J_URI" in os.environ:
         provider = "neo4j"
     else:
         raise ValueError(
@@ -146,6 +147,13 @@ def documents_indexing(
 
     vector_store_config = get_vector_store_config(provider)
     _logger.info("Detected %s database provider from secret.", provider)
+
+    if (
+        provider == "neo4j"
+        and kg_extraction_config is not None
+        and not (isinstance(foundation_model_id, str) and foundation_model_id.strip())
+    ):
+        raise ValueError("foundation_model_id is required for Neo4j indexing when kg_extraction_config is supplied.")
 
     params = OpenAIEmbeddingParams(**(embedding_params or {}))
 

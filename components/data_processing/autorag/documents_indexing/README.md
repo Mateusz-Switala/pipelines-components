@@ -28,7 +28,7 @@ Individual document failures (corrupt JSON, chunking errors) are recorded in the
 | `chunk_overlap` | `int` | `0` | Token overlap between consecutive chunks (recursive method only). |
 | `batch_size` | `int` | `20` | Number of documents loaded and processed per batch. Controls peak memory usage, not API payload sizes. Defaults to ``20``; ``0`` processes all documents in a single batch. |
 | `collection_name` | `Optional[str]` | `None` | Vector store collection to reuse (matches ``pattern.json`` ``settings.store_binding.collection_name``). Omit to create a new collection. |
-| `kg_extraction_config` | `Optional[dict]` | `None` | Neo4j graph-extraction settings from an optimized pattern. Ignored by other vector stores. |
+| `kg_extraction_config` | `Optional[dict]` | `None` | Neo4j graph-extraction settings from an optimized pattern. Requires ``foundation_model_id`` when indexing into Neo4j; ignored by other vector stores. |
 
 ## Usage Examples 🧪
 
