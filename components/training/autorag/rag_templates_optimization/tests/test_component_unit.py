@@ -198,7 +198,7 @@ def _pattern_payload(name: str, optimization_score: float | None = None) -> dict
         "settings": {
             "store_binding": {"provider_type": "milvus", "collection_name": f"{name}-collection"},
             "embedding": {"model_id": "em-0", "embedding_params": {}},
-            "generation": {"model_id": "fm-0"},
+            "generation": {"model_id": "fm-0", "temperature": 0.2, "max_completion_tokens": 2048},
             "chunking": {"method": "recursive", "chunk_size": 512, "chunk_overlap": 64},
         },
     }
@@ -552,6 +552,10 @@ class TestRagTemplatesOptimizationRun:
         ]
         assert pattern_json["indexing"]["pipeline_spec"]["pipeline_name"] == "documents-indexing-pipeline"
         assert pattern_json["indexing"]["pipeline_spec"]["parameters"]["foundation_model_id"] == "fm-0"
+        assert pattern_json["indexing"]["pipeline_spec"]["parameters"]["foundation_model_params"] == {
+            "temperature": 0.2,
+            "max_completion_tokens": 2048,
+        }
         assert pattern_json["indexing"]["pipeline_spec"]["parameters"]["kg_extraction_config"] == {
             "mode": "constrained"
         }

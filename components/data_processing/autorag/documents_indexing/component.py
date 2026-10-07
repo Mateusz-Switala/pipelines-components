@@ -20,6 +20,7 @@ def documents_indexing(
     embedded_artifact: dsl.EmbeddedInput[dsl.Dataset] = None,
     embedding_params: Optional[dict] = None,
     foundation_model_id: Optional[str] = None,
+    foundation_model_params: Optional[dict] = None,
     chunking_method: str = "recursive",
     chunk_size: int = 1024,
     chunk_overlap: int = 0,
@@ -60,6 +61,11 @@ def documents_indexing(
         foundation_model_id: Optional generation model ID used to extract entities
             when indexing into Neo4j. Set this from a graph-mode optimized pattern
             to reproduce its knowledge graph; ignored by other vector stores.
+        foundation_model_params: Optional generation parameters (for example,
+            ``temperature`` and ``max_completion_tokens``) used with
+            ``foundation_model_id`` for Neo4j entity extraction. Set this from a
+            graph-mode optimized pattern to reproduce its knowledge graph; ignored
+            by other vector stores.
         chunking_method: Chunking strategy: ``"recursive"`` (LangChain) or
             ``"hybrid"`` (Docling structure-aware).
         chunk_size: Maximum chunk size in tokens (128--2048).
@@ -338,7 +344,11 @@ def documents_indexing(
     embedding_model = OpenAIEmbeddingModel(client=maas_client, model_id=embedding_model_id, params=params)
     foundation_model = None
     if provider == "neo4j" and foundation_model_id:
-        foundation_model = OpenAIFoundationModel(client=maas_client, model_id=foundation_model_id)
+        foundation_model = OpenAIFoundationModel(
+            client=maas_client,
+            model_id=foundation_model_id,
+            params=foundation_model_params,
+        )
 
     effective_batch_size = batch_size if batch_size > 0 else total_documents
     total_chunks = 0

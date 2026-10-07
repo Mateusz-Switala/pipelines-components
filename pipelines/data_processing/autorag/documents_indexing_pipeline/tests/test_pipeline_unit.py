@@ -97,6 +97,7 @@ class TestDocumentsIndexingPipelineUnit:
         assert "componentInputParameter: chunk_overlap" in content
         assert "componentInputParameter: embedding_model_id" in content
         assert "componentInputParameter: foundation_model_id" in content
+        assert "componentInputParameter: foundation_model_params" in content
         assert "componentInputParameter: collection_name" in content
         assert "comp-documents-indexing:" in content
 

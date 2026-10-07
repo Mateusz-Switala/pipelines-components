@@ -29,6 +29,7 @@ def documents_indexing_pipeline(
     collection_name: Optional[str] = None,
     embedding_params: Optional[dict] = None,
     foundation_model_id: Optional[str] = None,
+    foundation_model_params: Optional[dict] = None,
     chunking_method: str = "recursive",
     chunk_size: int = 1024,
     chunk_overlap: int = 0,
@@ -62,6 +63,9 @@ def documents_indexing_pipeline(
         embedding_params: Dict passed to OpenAIEmbeddingParams (default: {}).
         foundation_model_id: Generation model used to rebuild Neo4j graph entities.
             It is supplied by an optimized graph-mode pattern; ignored by non-Neo4j stores.
+        foundation_model_params: Generation parameters (for example, ``temperature``
+            and ``max_completion_tokens``) for Neo4j graph extraction. Supplied by an
+            optimized graph-mode pattern; ignored by non-Neo4j stores.
         chunking_method: Chunking method (e.g. "recursive").
         chunk_size: Maximum chunk size in tokens (128--2048).
         chunk_overlap: Token overlap between consecutive chunks (recursive method only).
@@ -99,6 +103,7 @@ def documents_indexing_pipeline(
         embedding_params=embedding_params,
         embedding_model_id=embedding_model_id,
         foundation_model_id=foundation_model_id,
+        foundation_model_params=foundation_model_params,
         extracted_text=text_extraction_task.outputs["extracted_text"],
         chunking_method=chunking_method,
         chunk_size=chunk_size,

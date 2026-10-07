@@ -255,6 +255,10 @@ def rag_templates_optimization(
                             "embedding_model_id": settings["embedding"]["model_id"],
                             "embedding_params": settings["embedding"]["embedding_params"],
                             "foundation_model_id": settings["generation"]["model_id"],
+                            "foundation_model_params": {
+                                "temperature": settings["generation"]["temperature"],
+                                "max_completion_tokens": settings["generation"]["max_completion_tokens"],
+                            },
                             "chunking_method": settings["chunking"]["method"],
                             "chunk_size": settings["chunking"]["chunk_size"],
                             "chunk_overlap": settings["chunking"]["chunk_overlap"],

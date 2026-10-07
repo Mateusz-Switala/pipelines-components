@@ -470,11 +470,14 @@ class TestDocumentsIndexingProcessing:
             mocks,
             filenames=["a.json"],
             foundation_model_id="fm-0",
+            foundation_model_params={"temperature": 0.3, "max_completion_tokens": 1024},
             kg_extraction_config={"mode": "constrained"},
         )
 
         mocks["OpenAIFoundationModel"].assert_called_once_with(
-            client=mocks["create_maas_client"].return_value, model_id="fm-0"
+            client=mocks["create_maas_client"].return_value,
+            model_id="fm-0",
+            params={"temperature": 0.3, "max_completion_tokens": 1024},
         )
         assert (
             mocks["get_vector_store"].call_args.kwargs["foundation_model"]

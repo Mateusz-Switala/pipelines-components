@@ -23,6 +23,7 @@ Individual document failures (corrupt JSON, chunking errors) are recorded in the
 | `embedded_artifact` | `dsl.EmbeddedInput[dsl.Dataset]` | `None` | Embedded HTML report template injected by KFP at runtime from ``indexing_report_template.html``. |
 | `embedding_params` | `Optional[dict]` | `None` | Optional parameters forwarded to :class:`OpenAIEmbeddingParams` (e.g. ``embedding_dimension``, ``context_length``). |
 | `foundation_model_id` | `Optional[str]` | `None` | Optional generation model ID used to extract entities when indexing into Neo4j. Set this from a graph-mode optimized pattern to reproduce its knowledge graph; ignored by other vector stores. |
+| `foundation_model_params` | `Optional[dict]` | `None` | Optional generation parameters (for example, ``temperature`` and ``max_completion_tokens``) used with ``foundation_model_id`` for Neo4j entity extraction. Set this from a graph-mode optimized pattern to reproduce its knowledge graph; ignored by other vector stores. |
 | `chunking_method` | `str` | `recursive` | Chunking strategy: ``"recursive"`` (LangChain) or ``"hybrid"`` (Docling structure-aware). |
 | `chunk_size` | `int` | `1024` | Maximum chunk size in tokens (128--2048). |
 | `chunk_overlap` | `int` | `0` | Token overlap between consecutive chunks (recursive method only). |

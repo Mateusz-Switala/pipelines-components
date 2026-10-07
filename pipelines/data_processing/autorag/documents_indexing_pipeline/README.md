@@ -21,6 +21,7 @@ Discovers documents from object storage, extracts text, and indexes chunks into 
 | `collection_name` | `Optional[str]` | `None` | Vector store collection to reuse (aligned with ``pattern.json`` ``settings.store_binding.collection_name``). Omit to create a new collection. |
 | `embedding_params` | `Optional[dict]` | `None` | Dict passed to OpenAIEmbeddingParams (default: {}). |
 | `foundation_model_id` | `Optional[str]` | `None` | Generation model used to rebuild Neo4j graph entities. It is supplied by an optimized graph-mode pattern; ignored by non-Neo4j stores. |
+| `foundation_model_params` | `Optional[dict]` | `None` | Generation parameters (for example, ``temperature`` and ``max_completion_tokens``) for Neo4j graph extraction. Supplied by an optimized graph-mode pattern; ignored by non-Neo4j stores. |
 | `chunking_method` | `str` | `recursive` | Chunking method (e.g. "recursive"). |
 | `chunk_size` | `int` | `1024` | Maximum chunk size in tokens (128--2048). |
 | `chunk_overlap` | `int` | `0` | Token overlap between consecutive chunks (recursive method only). |
