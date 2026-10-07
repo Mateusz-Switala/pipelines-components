@@ -177,6 +177,7 @@ def rag_templates_optimization(
         },
     }
     PRESET_GRAPH_RETRIEVAL_CONFIG = {
+        # Use AI4RAG's Neo4j graph-retrieval defaults for the speed preset.
         "speed": {},
         "balanced": {
             "entity_pivot_limit": 3,
