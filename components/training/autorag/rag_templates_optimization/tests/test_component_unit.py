@@ -570,9 +570,8 @@ class TestRagTemplatesOptimizationRun:
             "temperature": 0.2,
             "max_completion_tokens": 2048,
         }
-        assert pattern_json["indexing"]["pipeline_spec"]["parameters"]["kg_extraction_config"] == {
-            "mode": "constrained"
-        }
+        assert pattern_json["template_id"] == "agentic_rag"
+        assert "graph_extraction_config" not in pattern_json["indexing"]["pipeline_spec"]["parameters"]
         indexing_notebook_call = next(
             call for call in mocks.generate_notebook_from_template.call_args_list if call.args[0] == "maas_indexing"
         )
@@ -668,6 +667,7 @@ class TestRagTemplatesOptimizationRun:
         search_space_path = _write_search_space_report(tmp_path)
         neo4j_pattern = _pattern_payload("pattern_a")
         neo4j_pattern["settings"]["store_binding"]["provider_type"] = "neo4j"
+        neo4j_pattern["settings"]["graph_extraction"] = {"mode": "constrained"}
         mocks.KFPEventHandler.return_value.patterns = [
             {"payload": neo4j_pattern, "evaluation_results": []},
         ]
@@ -692,6 +692,11 @@ class TestRagTemplatesOptimizationRun:
             "mass_creating_knowledge_graph",
             "mass_inference_knowledge_graph",
         ]
+        pattern_json = json.loads((Path(rag_patterns.path) / "pattern_a" / "pattern.json").read_text(encoding="utf-8"))
+        assert pattern_json["template_id"] == "agentic_graph_rag"
+        assert pattern_json["indexing"]["pipeline_spec"]["parameters"]["graph_extraction_config"] == {
+            "mode": "constrained"
+        }
 
     def test_missing_vector_db_env_raises_value_error(self, tmp_path):
         """Absent MILVUS_*/PGVECTOR_* env vars raise a descriptive ValueError."""
